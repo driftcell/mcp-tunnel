@@ -51,6 +51,7 @@ impl ServerHandler for AggregatedServer {
     }
 
     /// 处理 tools/list 请求：返回聚合后的工具列表。
+    #[tracing::instrument(skip(self))]
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -75,6 +76,7 @@ impl ServerHandler for AggregatedServer {
     }
 
     /// 处理 tools/call 请求：解析工具名前缀，路由到对应上游。
+    #[tracing::instrument(skip(self))]
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
@@ -139,6 +141,7 @@ impl ServerHandler for AggregatedServer {
 /// 1. 初始化 AggregatedClient 并连接所有配置的上游
 /// 2. 创建审计日志通道
 /// 3. 启动 axum HTTP server，挂载 StreamableHttpService 到 /mcp
+#[tracing::instrument(skip(config))]
 pub async fn start_server(config: &Config) -> Result<()> {
     let client = Arc::new(AggregatedClient::new());
     client.connect_all(&config.servers).await?;

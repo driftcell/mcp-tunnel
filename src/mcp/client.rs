@@ -39,6 +39,7 @@ impl AggregatedClient {
     }
 
     /// 连接到所有配置的上游服务
+    #[tracing::instrument(skip(self, configs))]
     pub async fn connect_all(&self, configs: &[ServerConfig]) -> Result<()> {
         let mut clients = self.clients.write().await;
         for config in configs {
@@ -57,6 +58,7 @@ impl AggregatedClient {
     }
 
     /// 连接单个上游
+    #[tracing::instrument(skip(config))]
     async fn connect_single(config: ServerConfig) -> Result<UpstreamClient> {
         match &config.ty {
             crate::config::UpstreamType::Stdio { command, args } => {
@@ -162,6 +164,7 @@ impl AggregatedClient {
     }
 
     /// 调用工具（使用带前缀的名称）
+    #[tracing::instrument(skip(self, arguments))]
     pub async fn call_tool(
         &self,
         prefixed_name: &str,
@@ -216,6 +219,7 @@ fn apply_filter(config: &ServerConfig, tools: Vec<Tool>) -> Vec<Tool> {
 }
 
 /// 连接到单个服务器并发现其工具列表（用于 TUI 中 OAuth 完成后的工具获取）
+#[tracing::instrument(skip(config))]
 pub async fn discover_tools(config: &ServerConfig) -> Result<Vec<Tool>> {
     match &config.ty {
         crate::config::UpstreamType::Stdio { command, args } => {
@@ -270,6 +274,7 @@ pub async fn discover_tools(config: &ServerConfig) -> Result<Vec<Tool>> {
 }
 
 /// Connect via streamable HTTP.
+#[tracing::instrument]
 async fn connect_http(url: &str, reqwest_client: reqwest::Client) -> Result<Peer<RoleClient>> {
     let streamable_config = StreamableHttpClientTransportConfig::with_uri(url);
     let streamable_transport =

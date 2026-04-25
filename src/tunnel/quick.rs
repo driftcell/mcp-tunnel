@@ -20,6 +20,7 @@ impl QuickTunnel {
     /// 启动 quick tunnel
     /// local_url: 本地服务地址，如 "http://localhost:3000"
     /// 返回生成的公网 URL
+    #[tracing::instrument(skip(self))]
     pub async fn start(&mut self, local_url: &str) -> Result<String> {
         let bin = super::binary::ensure_cloudflared().await?;
 
@@ -75,6 +76,7 @@ impl QuickTunnel {
     }
 
     /// 停止 tunnel
+    #[tracing::instrument(skip(self))]
     pub async fn stop(&mut self) -> Result<()> {
         if let Some(mut child) = self.child.take() {
             let _ = child.kill().await;

@@ -8,6 +8,7 @@ use crate::app::{App, Tab, AddDialogType};
 use crate::config::{Config, ServerConfig};
 use crate::error::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use tracing::{info, warn, debug};
 use ratatui::{
     backend::{Backend, CrosstermBackend},
     style::{Color, Style},
@@ -18,7 +19,9 @@ use ratatui::{
 use std::io;
 use std::path::PathBuf;
 
+#[tracing::instrument(skip(config))]
 pub async fn run_tui(config: Config, config_path: PathBuf) -> Result<()> {
+    info!("Starting TUI");
     crossterm::terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
     crossterm::execute!(
@@ -134,6 +137,8 @@ fn render(frame: &mut ratatui::Frame, app: &mut App) {
 }
 
 async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()> {
+    debug!("key pressed: {:?}", key.code);
+
     if app.show_add_dialog {
         handle_add_dialog_key(app, key).await?;
         return Ok(());
@@ -141,6 +146,7 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
 
     match key.code {
         KeyCode::Char('q') | KeyCode::Char('Q') => {
+            info!("TUI quit requested");
             app.should_quit = true;
         }
         KeyCode::Tab => {
@@ -178,6 +184,9 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
             }
         KeyCode::Char('d')
             if app.current_tab == Tab::Servers => {
+                if let Some(server) = app.selected_server_config() {
+                    info!("Removing server: {}", server.name);
+                }
                 app.remove_selected_server();
                 app.set_message("Server removed".to_string());
             }
@@ -193,6 +202,7 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                         }
                     };
 
+                    info!("Starting OAuth login for server: {}", server_name);
                     match run_oauth_login(&server_name, &url).await {
                         Ok(_) => {
                             // OAuth succeeded — discover tools from the server
@@ -220,12 +230,14 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                                     }
 
                                     let _ = app.save_config();
+                                    info!("OAuth success for '{}', discovered {} tools", server_name, count);
                                     app.set_message(format!(
                                         "OAuth ok for '{}'. {} tools discovered. Press Enter to view.",
                                         server_name, count
                                     ));
                                 }
                                 Err(e) => {
+                                    warn!("OAuth ok for '{}', but tool discovery failed: {}", server_name, e);
                                     app.set_message(format!(
                                         "OAuth ok for '{}', but tool discovery failed: {}",
                                         server_name, e
@@ -233,13 +245,17 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                                 }
                             }
                         }
-                        Err(e) => app.set_message(format!("OAuth login failed: {}", e)),
+                        Err(e) => {
+                            warn!("OAuth login failed for '{}': {}", server_name, e);
+                            app.set_message(format!("OAuth login failed: {}", e))
+                        }
                     }
                 }
             }
         KeyCode::Char('O')
             if app.current_tab == Tab::Servers => {
                 if let Some(server) = app.selected_server_config() {
+                    info!("Clearing OAuth token for server: {}", server.name);
                     let store = crate::mcp::oauth::FileCredentialStore::new(&server.name);
                     let _ = store.clear().await;
                     app.set_message(format!("OAuth token cleared for '{}'", server.name));
@@ -261,14 +277,17 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                 let local_url = "http://127.0.0.1:3000".to_string();
 
                 if app.quick_tunnel.is_none() {
+                    info!("Starting QuickTunnel");
                     let mut qt = crate::tunnel::quick::QuickTunnel::new();
                     match qt.start(&local_url).await {
                         Ok(url) => {
+                            info!("QuickTunnel started: {}", url);
                             app.tunnel_url = Some(url.clone());
                             app.quick_tunnel_running = true;
                             app.set_message(format!("QuickTunnel started: {}", url));
                         }
                         Err(e) => {
+                            warn!("Failed to start QuickTunnel: {}", e);
                             app.set_message(format!("Failed to start QuickTunnel: {}", e));
                             return Ok(());
                         }
@@ -277,21 +296,27 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                 } else {
                     let qt = app.quick_tunnel.as_mut().unwrap();
                     if qt.is_running() {
+                        info!("Stopping QuickTunnel");
                         if let Err(e) = qt.stop().await {
+                            warn!("Failed to stop QuickTunnel: {}", e);
                             app.set_message(format!("Failed to stop QuickTunnel: {}", e));
                             return Ok(());
                         }
+                        info!("QuickTunnel stopped");
                         app.quick_tunnel_running = false;
                         app.tunnel_url = None;
                         app.set_message("QuickTunnel stopped.".to_string());
                     } else {
+                        info!("Restarting QuickTunnel");
                         match qt.start(&local_url).await {
                             Ok(url) => {
+                                info!("QuickTunnel restarted: {}", url);
                                 app.tunnel_url = Some(url.clone());
                                 app.quick_tunnel_running = true;
                                 app.set_message(format!("QuickTunnel started: {}", url));
                             }
                             Err(e) => {
+                                warn!("Failed to restart QuickTunnel: {}", e);
                                 app.set_message(format!("Failed to start QuickTunnel: {}", e));
                                 return Ok(());
                             }
@@ -314,6 +339,7 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
     Ok(())
 }
 
+#[tracing::instrument]
 async fn run_oauth_login(name: &str, url: &str) -> Result<()> {
     use rmcp::transport::auth::{AuthError, OAuthState};
 
@@ -376,6 +402,7 @@ async fn handle_add_dialog_key(app: &mut App, key: crossterm::event::KeyEvent) -
                 let dialog_type = app.add_dialog_type;
                 match dialog_type {
                     AddDialogType::Http => {
+                        info!("Adding HTTP server: {} -> {}", name, value);
                         app.config.servers.push(ServerConfig {
                             name: name.clone(),
                             ty: crate::config::UpstreamType::Http { url: value },
@@ -387,6 +414,7 @@ async fn handle_add_dialog_key(app: &mut App, key: crossterm::event::KeyEvent) -
                         let parts: Vec<&str> = value.split_whitespace().collect();
                         let cmd = parts.first().map(|s| s.to_string()).unwrap_or_default();
                         let args = parts.iter().skip(1).map(|s| s.to_string()).collect();
+                        info!("Adding stdio server: {} -> {} {:?}", name, cmd, args);
                         app.config.servers.push(ServerConfig {
                             name: name.clone(),
                             ty: crate::config::UpstreamType::Stdio { command: cmd, args },

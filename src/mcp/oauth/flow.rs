@@ -9,6 +9,7 @@ use crate::mcp::oauth::{OAUTH_CALLBACK_ADDR, OAUTH_CALLBACK_URL};
 
 /// Run the full PKCE OAuth flow using rmcp's OAuthState.
 /// Returns the token response on success.
+#[tracing::instrument]
 pub async fn run_pkce_flow(url: &str) -> Result<rmcp::transport::auth::OAuthTokenResponse, AppError> {
     let mut state = OAuthState::new(url, None)
         .await
@@ -50,6 +51,7 @@ pub async fn run_pkce_flow(url: &str) -> Result<rmcp::transport::auth::OAuthToke
 
 /// Start local TCP callback server, wait for browser redirect.
 /// Returns (authorization_code, csrf_token) on success.
+#[tracing::instrument]
 async fn wait_for_callback(addr: &str) -> Result<(String, String), AppError> {
     let listener = tokio::net::TcpListener::bind(addr)
         .await

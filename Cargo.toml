@@ -38,7 +38,7 @@ oauth2 = "5"
 
 tracing = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2"
 anyhow = "1"
 

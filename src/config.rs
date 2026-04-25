@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
+use tracing::{info, debug};
 use crate::error::Result;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -80,12 +81,14 @@ impl Default for TunnelConfig {
 impl Config {
     pub fn load(path: &Path) -> Result<Config> {
         if !path.exists() {
+            info!("Config file not found at {:?}, using defaults", path);
             return Ok(Config::default());
         }
         let content = std::fs::read_to_string(path)
             .map_err(|e| crate::error::AppError::Config(format!("Failed to read config file: {e}")))?;
         let config: Config = toml::from_str(&content)
             .map_err(|e| crate::error::AppError::Config(format!("Failed to parse config: {e}")))?;
+        debug!("Loaded config with {} server(s)", config.servers.len());
         Ok(config)
     }
 
@@ -94,6 +97,7 @@ impl Config {
             .map_err(|e| crate::error::AppError::Config(format!("Failed to serialize config: {e}")))?;
         std::fs::write(path, content)
             .map_err(|e| crate::error::AppError::Config(format!("Failed to write config file: {e}")))?;
+        info!("Config saved to {:?}", path);
         Ok(())
     }
 }
