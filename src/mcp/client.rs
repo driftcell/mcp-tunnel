@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use oauth2::TokenResponse;
 use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
-use rmcp::service::{Peer, RoleClient};
+use rmcp::service::{Peer, RoleClient, RunningService};
 use rmcp::transport::auth::{AuthError, OAuthState};
 use rmcp::transport::child_process::TokioChildProcess;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -29,6 +29,10 @@ struct UpstreamClient {
     peer: Peer<RoleClient>,
     /// 缓存的工具列表（原始名称）
     tools: Vec<Tool>,
+    /// Keep the RunningService alive so the background transport task isn't cancelled.
+    /// Both stdio and HTTP use `()` as the service type, so the type is the same.
+    #[allow(dead_code)]
+    _service: RunningService<RoleClient, ()>,
 }
 
 impl AggregatedClient {
@@ -87,6 +91,7 @@ impl AggregatedClient {
                 Ok(UpstreamClient {
                     peer,
                     tools: filtered_tools,
+                    _service: client,
                 })
             }
             crate::config::UpstreamType::Http { url } => {
@@ -126,7 +131,17 @@ impl AggregatedClient {
                     reqwest::Client::default()
                 };
 
-                let peer = connect_http(url, reqwest_client).await?;
+                let streamable_config = StreamableHttpClientTransportConfig::with_uri(url.as_str());
+                let streamable_transport =
+                    StreamableHttpClientTransport::with_client(reqwest_client, streamable_config);
+
+                let client = ()
+                    .serve(streamable_transport)
+                    .await
+                    .map_err(|e| AppError::Mcp(format!("streamable HTTP transport error: {}", e)))?;
+
+                let peer = client.peer().clone();
+                info!("Connected via streamable HTTP to {}", url);
 
                 let tools = match peer.list_all_tools().await {
                     Ok(tools) => tools,
@@ -141,6 +156,7 @@ impl AggregatedClient {
                 Ok(UpstreamClient {
                     peer,
                     tools: filtered_tools,
+                    _service: client,
                 })
             }
         }
@@ -263,30 +279,24 @@ pub async fn discover_tools(config: &ServerConfig) -> Result<Vec<Tool>> {
                 reqwest::Client::default()
             };
 
-            let peer = connect_http(url, reqwest_client).await?;
+            let streamable_config = StreamableHttpClientTransportConfig::with_uri(url.as_str());
+            let streamable_transport =
+                StreamableHttpClientTransport::with_client(reqwest_client, streamable_config);
+
+            let client = ()
+                .serve(streamable_transport)
+                .await
+                .map_err(|e| AppError::Mcp(format!("streamable HTTP transport error: {}", e)))?;
+
+            let peer = client.peer().clone();
             let tools = peer
                 .list_all_tools()
                 .await
                 .map_err(|e| AppError::Mcp(format!("list tools error: {}", e)))?;
             Ok(tools)
+            // `client` (RunningService) stays alive until here, keeping the transport open
         }
     }
-}
-
-/// Connect via streamable HTTP.
-#[tracing::instrument]
-async fn connect_http(url: &str, reqwest_client: reqwest::Client) -> Result<Peer<RoleClient>> {
-    let streamable_config = StreamableHttpClientTransportConfig::with_uri(url);
-    let streamable_transport =
-        StreamableHttpClientTransport::with_client(reqwest_client, streamable_config);
-
-    let client = ()
-        .serve(streamable_transport)
-        .await
-        .map_err(|e| AppError::Mcp(format!("streamable HTTP transport error: {}", e)))?;
-
-    info!("Connected via streamable HTTP to {}", url);
-    Ok(client.peer().clone())
 }
 
 /// 构建 stdio 命令

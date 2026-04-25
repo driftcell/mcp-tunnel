@@ -4,7 +4,10 @@ use crate::server::audit::AuditLog;
 use crate::tunnel::quick::QuickTunnel;
 use ratatui::widgets::ListState;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Tab {
@@ -37,6 +40,11 @@ pub struct App {
     pub tunnel_url: Option<String>,
     pub quick_tunnel_running: bool,
     pub quick_tunnel: Option<QuickTunnel>,
+
+    // Serve mode
+    pub serve_running: bool,
+    pub serve_cancel: Option<CancellationToken>,
+    pub serve_audit_buffer: Arc<Mutex<Vec<AuditLog>>>,
 
     // Messages (底部短暂提示)
     pub message: Option<String>,
@@ -72,6 +80,9 @@ impl App {
             tunnel_url: None,
             quick_tunnel_running: false,
             quick_tunnel: None,
+            serve_running: false,
+            serve_cancel: None,
+            serve_audit_buffer: Arc::new(Mutex::new(Vec::new())),
             message: None,
             message_time: None,
             show_add_dialog: false,

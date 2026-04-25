@@ -91,8 +91,20 @@ pub fn render_servers(frame: &mut Frame, app: &mut App, area: Rect) {
         "No servers configured.\nPress 'a' to add one.".to_string()
     };
 
-    let detail =
-        Paragraph::new(detail_text).block(Block::default().title("Details").borders(Borders::ALL));
+    let detail_title = if app.serve_running {
+        "Details ● SERVE ON"
+    } else {
+        "Details"
+    };
+    let detail_block = Block::default()
+        .title(detail_title)
+        .borders(Borders::ALL)
+        .border_style(if app.serve_running {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default()
+        });
+    let detail = Paragraph::new(detail_text).block(detail_block);
     frame.render_widget(detail, detail_area);
 }
 

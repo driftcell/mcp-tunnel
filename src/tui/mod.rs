@@ -37,6 +37,11 @@ pub async fn run_tui(config: Config, config_path: PathBuf) -> Result<()> {
 
     let result = run_app(&mut terminal, &mut app).await;
 
+    if app.serve_running {
+        info!("TUI quitting, stopping serve...");
+        stop_serve(&mut app).await;
+    }
+
     crossterm::terminal::disable_raw_mode()?;
     crossterm::execute!(
         terminal.backend_mut(),
@@ -70,6 +75,15 @@ async fn run_app<B: Backend>(
 
         if last_tick.elapsed() >= tick_rate {
             app.clear_message_if_expired();
+
+            // Drain audit logs from the serve background task into the UI buffer.
+            if app.serve_running {
+                let mut buf = app.serve_audit_buffer.blocking_lock();
+                if !buf.is_empty() {
+                    app.audit_logs.extend(buf.drain(..));
+                }
+            }
+
             last_tick = std::time::Instant::now();
         }
 
@@ -118,7 +132,10 @@ fn render(frame: &mut ratatui::Frame, app: &mut App) {
     }
 
     let help_text = match app.current_tab {
-        Tab::Servers => "q:quit | Tab:switch | ↑↓:nav | Enter:tools | a:add | d:delete | s:serve | o:OAuth login | O:clear OAuth",
+        Tab::Servers => {
+            let serve_hint = if app.serve_running { "s:stop serve" } else { "s:serve" };
+            &format!("q:quit | Tab:switch | ↑↓:nav | Enter:tools | a:add | d:delete | {} | o:OAuth | O:clear OAuth", serve_hint)
+        }
         Tab::Tools => "q:quit | Tab:switch | ↑↓:nav | Space:toggle | Esc:back",
         Tab::Tunnel => "q:quit | Tab:switch | t:toggle | r:named tunnel ref",
         Tab::AuditLog => "q:quit | Tab:switch | ↑↓:scroll | c:clear",
@@ -269,9 +286,23 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
             if app.current_tab == Tab::Tools => {
                 app.current_tab = Tab::Servers;
             }
-        KeyCode::Char('s') => {
-            app.set_message("Serve: not yet implemented in TUI".to_string());
-        }
+        KeyCode::Char('s')
+            if app.current_tab == Tab::Servers => {
+                if app.serve_running {
+                    stop_serve(app).await;
+                    app.set_message("Serve stopped".to_string());
+                } else {
+                    match start_serve(app).await {
+                        Ok(()) => {
+                            app.set_message("Serve started on http://127.0.0.1:3000/mcp".to_string());
+                        }
+                        Err(e) => {
+                            warn!("Failed to start serve: {}", e);
+                            app.set_message(format!("Failed to start serve: {}", e));
+                        }
+                    }
+                }
+            }
         KeyCode::Char('t')
             if app.current_tab == Tab::Tunnel => {
                 let local_url = "http://127.0.0.1:3000".to_string();
@@ -375,6 +406,99 @@ async fn run_oauth_login(name: &str, url: &str) -> Result<()> {
     let token_response = crate::mcp::oauth::run_pkce_flow(url).await?;
     store.save(&token_response).await?;
     Ok(())
+}
+
+#[tracing::instrument(skip(app))]
+async fn start_serve(app: &mut App) -> Result<()> {
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService,
+        session::local::LocalSessionManager,
+    };
+    use std::sync::Arc;
+    use tokio_util::sync::CancellationToken;
+    use tracing::{info, warn};
+
+    const BIND_ADDR: &str = "127.0.0.1:3000";
+    const MCP_PATH: &str = "/mcp";
+
+    let config = app.config.clone();
+
+    let client = Arc::new(crate::mcp::client::AggregatedClient::new());
+    client.connect_all(&config.servers).await?;
+
+    if !client.has_any_client().await {
+        return Err(crate::error::AppError::Mcp(
+            "No upstream servers connected".to_string(),
+        ));
+    }
+
+    let tools = client.list_tools().await;
+    let upstreams = client.upstream_names().await;
+    info!(
+        "Aggregated {} tool(s) from {} upstream(s): {:?}",
+        tools.len(),
+        upstreams.len(),
+        upstreams
+    );
+
+    let mut audit_channel = crate::server::audit::AuditChannel::new(1000);
+    let audit = crate::server::audit::AuditLogger::new(audit_channel.sender);
+    let audit_buffer = app.serve_audit_buffer.clone();
+
+    tokio::spawn(async move {
+        while let Some(log) = audit_channel.receiver.recv().await {
+            audit_buffer.lock().await.push(log);
+        }
+    });
+
+    let server = crate::server::router::AggregatedServer::new(client, audit);
+
+    let bind_addr: std::net::SocketAddr = BIND_ADDR
+        .parse()
+        .map_err(|e| crate::error::AppError::Mcp(format!("invalid bind address: {e}")))?;
+
+    let ct = CancellationToken::new();
+    app.serve_cancel = Some(ct.clone());
+
+    let session_manager = Arc::new(LocalSessionManager::default());
+    let http_config = StreamableHttpServerConfig::default().with_cancellation_token(ct.clone());
+
+    let service = StreamableHttpService::new(
+        move || Ok(server.clone()),
+        session_manager,
+        http_config,
+    );
+
+    let router = axum::Router::new().nest_service(MCP_PATH, service);
+    let listener = tokio::net::TcpListener::bind(bind_addr)
+        .await
+        .map_err(|e| crate::error::AppError::Mcp(format!("bind error: {e}")))?;
+
+    app.serve_running = true;
+    info!("Serve started on http://{bind_addr}{MCP_PATH}");
+
+    tokio::spawn(async move {
+        let serve_fut = axum::serve(listener, router).with_graceful_shutdown({
+            let ct = ct.clone();
+            async move { ct.cancelled_owned().await }
+        });
+
+        if let Err(e) = serve_fut.await {
+            warn!("server exited with error: {e}");
+        }
+        info!("Serve stopped.");
+    });
+
+    Ok(())
+}
+
+#[tracing::instrument(skip(app))]
+async fn stop_serve(app: &mut App) {
+    if let Some(ct) = app.serve_cancel.take() {
+        ct.cancel();
+    }
+    app.serve_running = false;
+    info!("Serve stopping...");
 }
 
 async fn handle_add_dialog_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()> {

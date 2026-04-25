@@ -23,9 +23,14 @@ pub fn render_tools(frame: &mut Frame, app: &mut App, area: Rect) {
             let desc = if tool.description.is_empty() {
                 String::new()
             } else {
-                format!(" - {}", tool.description)
+                let brief: String = tool.description.chars().take(50).collect();
+                if tool.description.len() > 50 {
+                    format!(" - {}...", brief)
+                } else {
+                    format!(" - {}", brief)
+                }
             };
-            ListItem::new(format!("{} {:20}{}", icon, tool.name, desc))
+            ListItem::new(format!("{} {}{}", icon, tool.name, desc))
                 .style(style)
         }).collect()
     } else {
