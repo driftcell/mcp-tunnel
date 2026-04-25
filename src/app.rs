@@ -1,0 +1,210 @@
+use crate::config::{Config, ServerConfig};
+use crate::error::Result;
+use crate::server::audit::AuditLog;
+use crate::tunnel::quick::QuickTunnel;
+use ratatui::widgets::ListState;
+use std::path::PathBuf;
+use std::time::Instant;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Tab {
+    Servers,
+    Tools,
+    Tunnel,
+    AuditLog,
+}
+
+pub struct App {
+    pub config: Config,
+    pub config_path: PathBuf,
+    pub current_tab: Tab,
+    pub should_quit: bool,
+
+    // Servers tab
+    pub server_list_state: ListState,
+    pub selected_server: usize,
+
+    // Tools tab
+    pub tool_list_state: ListState,
+    pub selected_tool: usize,
+    pub tools_for_server: Option<String>, // 当前展示工具的服务名
+
+    // Audit log
+    pub audit_logs: Vec<AuditLog>,
+    pub audit_scroll: usize,
+
+    // Tunnel
+    pub tunnel_url: Option<String>,
+    pub quick_tunnel_running: bool,
+    pub quick_tunnel: Option<QuickTunnel>,
+
+    // Messages (底部短暂提示)
+    pub message: Option<String>,
+    pub message_time: Option<Instant>,
+
+    // Add dialog
+    pub show_add_dialog: bool,
+    pub add_dialog_type: AddDialogType,
+    pub add_dialog_fields: Vec<String>,
+    pub add_dialog_focus: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AddDialogType {
+    Http,
+    Stdio,
+}
+
+impl App {
+    pub fn new(config: Config, config_path: PathBuf) -> Self {
+        let mut app = Self {
+            config,
+            config_path,
+            current_tab: Tab::Servers,
+            should_quit: false,
+            server_list_state: ListState::default(),
+            selected_server: 0,
+            tool_list_state: ListState::default(),
+            selected_tool: 0,
+            tools_for_server: None,
+            audit_logs: Vec::new(),
+            audit_scroll: 0,
+            tunnel_url: None,
+            quick_tunnel_running: false,
+            quick_tunnel: None,
+            message: None,
+            message_time: None,
+            show_add_dialog: false,
+            add_dialog_type: AddDialogType::Http,
+            add_dialog_fields: vec![String::new(), String::new()],
+            add_dialog_focus: 0,
+        };
+        if !app.config.servers.is_empty() {
+            app.server_list_state.select(Some(0));
+        }
+        app
+    }
+
+    pub fn save_config(&mut self) -> Result<()> {
+        self.config.save(&self.config_path)
+    }
+
+    pub fn next_server(&mut self) {
+        if self.config.servers.is_empty() { return; }
+        self.selected_server = (self.selected_server + 1) % self.config.servers.len();
+        self.server_list_state.select(Some(self.selected_server));
+    }
+
+    pub fn prev_server(&mut self) {
+        if self.config.servers.is_empty() { return; }
+        if self.selected_server == 0 {
+            self.selected_server = self.config.servers.len() - 1;
+        } else {
+            self.selected_server -= 1;
+        }
+        self.server_list_state.select(Some(self.selected_server));
+    }
+
+    pub fn next_tool(&mut self) {
+        let tools_count = self.current_tools_count();
+        if tools_count == 0 { return; }
+        self.selected_tool = (self.selected_tool + 1) % tools_count;
+        self.tool_list_state.select(Some(self.selected_tool));
+    }
+
+    pub fn prev_tool(&mut self) {
+        let tools_count = self.current_tools_count();
+        if tools_count == 0 { return; }
+        if self.selected_tool == 0 {
+            self.selected_tool = tools_count - 1;
+        } else {
+            self.selected_tool -= 1;
+        }
+        self.tool_list_state.select(Some(self.selected_tool));
+    }
+
+    fn current_tools_count(&self) -> usize {
+        // 从 tool_cache 中查找当前服务的工具数量
+        self.tools_for_server.as_ref().and_then(|name| {
+            self.config.tool_cache.iter().find(|c| c.server == *name)
+                .map(|c| c.tools.len())
+        }).unwrap_or(0)
+    }
+
+    pub fn selected_server_config(&self) -> Option<&ServerConfig> {
+        self.config.servers.get(self.selected_server)
+    }
+
+    pub fn set_message(&mut self, msg: String) {
+        self.message = Some(msg);
+        self.message_time = Some(Instant::now());
+    }
+
+    pub fn clear_message_if_expired(&mut self) {
+        if let Some(time) = self.message_time
+            && time.elapsed().as_secs() > 3
+        {
+            self.message = None;
+            self.message_time = None;
+        }
+    }
+
+    pub fn next_tab(&mut self) {
+        self.current_tab = match self.current_tab {
+            Tab::Servers => Tab::Tools,
+            Tab::Tools => Tab::Tunnel,
+            Tab::Tunnel => Tab::AuditLog,
+            Tab::AuditLog => Tab::Servers,
+        };
+    }
+
+    pub fn prev_tab(&mut self) {
+        self.current_tab = match self.current_tab {
+            Tab::Servers => Tab::AuditLog,
+            Tab::Tools => Tab::Servers,
+            Tab::Tunnel => Tab::Tools,
+            Tab::AuditLog => Tab::Tunnel,
+        };
+    }
+
+    pub fn remove_selected_server(&mut self) {
+        if self.selected_server < self.config.servers.len() {
+            self.config.servers.remove(self.selected_server);
+            if self.config.servers.is_empty() {
+                self.selected_server = 0;
+                self.server_list_state.select(None);
+            } else if self.selected_server >= self.config.servers.len() {
+                self.selected_server = self.config.servers.len() - 1;
+                self.server_list_state.select(Some(self.selected_server));
+            }
+            let _ = self.save_config();
+        }
+    }
+
+    pub fn toggle_selected_tool(&mut self) {
+        if let Some(server_name) = &self.tools_for_server
+            && let Some(cache) = self.config.tool_cache.iter_mut().find(|c| c.server == *server_name)
+            && let Some(tool) = cache.tools.get_mut(self.selected_tool)
+        {
+            tool.enabled = !tool.enabled;
+            // 同步到对应 ServerConfig 的 disabled_tools
+            if let Some(config) = self.config.servers.iter_mut().find(|s| s.name == *server_name) {
+                if tool.enabled {
+                    config.disabled_tools.remove(&tool.name);
+                } else {
+                    config.disabled_tools.insert(tool.name.clone());
+                }
+            }
+            let _ = self.save_config();
+        }
+    }
+
+    pub fn enter_tools_tab(&mut self) {
+        if let Some(server) = self.selected_server_config() {
+            self.tools_for_server = Some(server.name.clone());
+            self.current_tab = Tab::Tools;
+            self.selected_tool = 0;
+            self.tool_list_state.select(Some(0));
+        }
+    }
+}

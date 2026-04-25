@@ -1,0 +1,13 @@
+tool_cache = []
+
+[[servers]]
+name = "notion"
+enabled_tools = []
+disabled_tools = []
+
+[servers.type]
+type = "http"
+url = "https://mcp.notion.com/mcp"
+
+[tunnel]
+mode = "disabled"

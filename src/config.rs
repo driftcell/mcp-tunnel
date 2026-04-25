@@ -1,0 +1,111 @@
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::path::Path;
+use crate::error::Result;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Config {
+    #[serde(default)]
+    pub servers: Vec<ServerConfig>,
+    #[serde(default)]
+    pub tunnel: TunnelConfig,
+    #[serde(default)]
+    pub tool_cache: Vec<ToolCache>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub ty: UpstreamType,
+    #[serde(default)]
+    pub enabled_tools: HashSet<String>,
+    #[serde(default)]
+    pub disabled_tools: HashSet<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum UpstreamType {
+    Http { url: String },
+    Stdio { command: String, #[serde(default)] args: Vec<String> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TunnelConfig {
+    #[serde(default = "default_tunnel_mode")]
+    pub mode: TunnelMode,
+    pub name: Option<String>,
+}
+
+fn default_tunnel_mode() -> TunnelMode {
+    TunnelMode::Disabled
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TunnelMode {
+    Disabled,
+    Quick,
+    Named,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCache {
+    pub server: String,
+    pub tools: Vec<ToolInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolInfo {
+    pub name: String,
+    pub description: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for TunnelConfig {
+    fn default() -> Self {
+        TunnelConfig {
+            mode: default_tunnel_mode(),
+            name: None,
+        }
+    }
+}
+
+impl Config {
+    pub fn load(path: &Path) -> Result<Config> {
+        if !path.exists() {
+            return Ok(Config::default());
+        }
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| crate::error::AppError::Config(format!("Failed to read config file: {e}")))?;
+        let config: Config = toml::from_str(&content)
+            .map_err(|e| crate::error::AppError::Config(format!("Failed to parse config: {e}")))?;
+        Ok(config)
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        let content = toml::to_string_pretty(self)
+            .map_err(|e| crate::error::AppError::Config(format!("Failed to serialize config: {e}")))?;
+        std::fs::write(path, content)
+            .map_err(|e| crate::error::AppError::Config(format!("Failed to write config file: {e}")))?;
+        Ok(())
+    }
+}
+
+impl ServerConfig {
+    pub fn is_tool_enabled(&self, tool_name: &str) -> bool {
+        if self.disabled_tools.contains(tool_name) {
+            return false;
+        }
+        if self.enabled_tools.is_empty() {
+            return true;
+        }
+        self.enabled_tools.contains(tool_name)
+    }
+}

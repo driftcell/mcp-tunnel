@@ -1,0 +1,40 @@
+[package]
+name = "mcp-tunnel"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1"
+futures = "0.3"
+tokio = { version = "1", features = ["full"] }
+
+rmcp = { version = "1.5.0", features = ["client", "server", "auth", "transport-child-process", "client-side-sse", "server-side-http", "transport-streamable-http-client", "transport-streamable-http-client-reqwest", "reqwest"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+serde_json = "1"
+
+ratatui = "0.29"
+crossterm = "0.28"
+
+clap = { version = "4", features = ["derive"] }
+
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+reqwest = { version = "0.12", features = ["json", "stream"] }
+axum = "0.8"
+
+oauth2 = "5"
+
+tracing = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+tracing-subscriber = "0.3"
+thiserror = "2"
+anyhow = "1"
+
+dirs = "6"
+which = "7"
+tempfile = "3"
+tar = "0.4"
+flate2 = "1"
+open = "5.3.4"
+url = "2.5.8"
