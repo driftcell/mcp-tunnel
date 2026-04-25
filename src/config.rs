@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::path::Path;
 use tracing::{info, debug};
 use crate::error::Result;
@@ -20,9 +20,9 @@ pub struct ServerConfig {
     #[serde(rename = "type")]
     pub ty: UpstreamType,
     #[serde(default)]
-    pub enabled_tools: HashSet<String>,
+    pub enabled_tools: BTreeSet<String>,
     #[serde(default)]
-    pub disabled_tools: HashSet<String>,
+    pub disabled_tools: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

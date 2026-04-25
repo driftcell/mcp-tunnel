@@ -62,8 +62,8 @@ impl AuditLogger {
             error: None,
             duration_ms: 0,
         };
-        if self.sender.send(log).await.is_err() {
-            tracing::warn!("Audit log channel closed; log entry dropped");
+        if let Err(e) = self.sender.try_send(log) {
+            tracing::warn!("Failed to send audit log: {}", e);
         }
     }
 
@@ -84,8 +84,8 @@ impl AuditLogger {
             error: None,
             duration_ms,
         };
-        if self.sender.send(log).await.is_err() {
-            tracing::warn!("Audit log channel closed; log entry dropped");
+        if let Err(e) = self.sender.try_send(log) {
+            tracing::warn!("Failed to send audit log: {}", e);
         }
     }
 
@@ -106,8 +106,8 @@ impl AuditLogger {
             error: Some(error),
             duration_ms,
         };
-        if self.sender.send(log).await.is_err() {
-            tracing::warn!("Audit log channel closed; log entry dropped");
+        if let Err(e) = self.sender.try_send(log) {
+            tracing::warn!("Failed to send audit log: {}", e);
         }
     }
 
@@ -126,8 +126,8 @@ impl AuditLogger {
             error: None,
             duration_ms: 0,
         };
-        if self.sender.send(log).await.is_err() {
-            tracing::warn!("Audit log channel closed; log entry dropped");
+        if let Err(e) = self.sender.try_send(log) {
+            tracing::warn!("Failed to send audit log: {}", e);
         }
     }
 }

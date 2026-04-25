@@ -1,4 +1,5 @@
 use crate::config::{Config, ServerConfig};
+use crate::constants::TUI_MESSAGE_DURATION_SECS;
 use crate::error::Result;
 use crate::server::audit::AuditLog;
 use crate::tunnel::quick::QuickTunnel;
@@ -6,7 +7,7 @@ use ratatui::widgets::ListState;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::Mutex;
+use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -153,7 +154,7 @@ impl App {
 
     pub fn clear_message_if_expired(&mut self) {
         if let Some(time) = self.message_time
-            && time.elapsed().as_secs() > 3
+            && time.elapsed().as_secs() > TUI_MESSAGE_DURATION_SECS
         {
             self.message = None;
             self.message_time = None;
@@ -194,20 +195,19 @@ impl App {
     }
 
     pub fn toggle_selected_tool(&mut self) -> Result<()> {
-        if let Some(server_name) = &self.tools_for_server
-            && let Some(cache) = self.config.tool_cache.iter_mut().find(|c| c.server == *server_name)
-            && let Some(tool) = cache.tools.get_mut(self.selected_tool)
-        {
-            tool.enabled = !tool.enabled;
-            // 同步到对应 ServerConfig 的 disabled_tools
+        if let Some(server_name) = &self.tools_for_server {
             if let Some(config) = self.config.servers.iter_mut().find(|s| s.name == *server_name) {
-                if tool.enabled {
-                    config.disabled_tools.remove(&tool.name);
-                } else {
-                    config.disabled_tools.insert(tool.name.clone());
+                if let Some(cache) = self.config.tool_cache.iter().find(|c| c.server == *server_name) {
+                    if let Some(tool) = cache.tools.get(self.selected_tool) {
+                        if config.disabled_tools.contains(&tool.name) {
+                            config.disabled_tools.remove(&tool.name);
+                        } else {
+                            config.disabled_tools.insert(tool.name.clone());
+                        }
+                        return self.save_config();
+                    }
                 }
             }
-            self.save_config()?;
         }
         Ok(())
     }

@@ -6,6 +6,7 @@ pub mod audit_log;
 
 use crate::app::{App, Tab, AddDialogType};
 use crate::config::{Config, ServerConfig};
+use crate::constants::{DEFAULT_BASE_URL, DEFAULT_BIND_ADDR, MCP_PATH, TICK_RATE_MS};
 use crate::error::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use rmcp::transport::streamable_http_server::{
@@ -21,6 +22,7 @@ use ratatui::{
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -58,12 +60,116 @@ pub async fn run_tui(config: Config, config_path: PathBuf) -> Result<()> {
     result
 }
 
+enum BackgroundInitMsg {
+    Tools(String, Vec<crate::config::ToolInfo>),
+    Status(String),
+}
+
 async fn run_app<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
 ) -> Result<()> {
     let mut last_tick = std::time::Instant::now();
-    let tick_rate = std::time::Duration::from_millis(250);
+    let tick_rate = std::time::Duration::from_millis(TICK_RATE_MS);
+
+    let (init_tx, mut init_rx) = mpsc::channel::<BackgroundInitMsg>(16);
+
+    let http_servers: Vec<ServerConfig> = app
+        .config
+        .servers
+        .iter()
+        .filter(|s| matches!(s.ty, crate::config::UpstreamType::Http { .. }))
+        .cloned()
+        .collect();
+
+    let mut bg_init_handle = if !http_servers.is_empty() {
+        let init_cancel = CancellationToken::new();
+        let init_cancel_clone = init_cancel.clone();
+        let handle = tokio::spawn(async move {
+            let mut tasks = Vec::new();
+            for server in http_servers {
+                let tx = init_tx.clone();
+                let ct = init_cancel_clone.clone();
+                let task = tokio::spawn(async move {
+                    let name = server.name.clone();
+                    let _url = match &server.ty {
+                        crate::config::UpstreamType::Http { url } => url.clone(),
+                        _ => return,
+                    };
+
+                    // Check if token exists before any network I/O.
+                    let has_token = match check_oauth_token_exists(&name).await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            let _ = tx
+                                .send(BackgroundInitMsg::Status(format!(
+                                    "Token check failed for '{}': {}",
+                                    name, e
+                                )))
+                                .await;
+                            return;
+                        }
+                    };
+
+                    if !has_token {
+                        let _ = tx
+                            .send(BackgroundInitMsg::Status(format!(
+                                "'{}' needs OAuth (press 'o')",
+                                name
+                            )))
+                            .await;
+                        return;
+                    }
+
+                    if ct.is_cancelled() {
+                        return;
+                    }
+
+                    // Token exists — run tool discovery with a timeout.
+                    let discovery_fut = crate::mcp::client::discover_tools(&server);
+                    match tokio::time::timeout(std::time::Duration::from_secs(30), discovery_fut).await
+                    {
+                        Ok(Ok(tools)) => {
+                            let tool_infos: Vec<crate::config::ToolInfo> = tools
+                                .into_iter()
+                                .map(|t| crate::config::ToolInfo {
+                                    name: t.name.as_ref().to_string(),
+                                    description: t.description.unwrap_or_default().to_string(),
+                                    enabled: true,
+                                })
+                                .collect();
+                            let _ = tx
+                                .send(BackgroundInitMsg::Tools(name.clone(), tool_infos))
+                                .await;
+                        }
+                        Ok(Err(e)) => {
+                            let _ = tx
+                                .send(BackgroundInitMsg::Status(format!(
+                                    "Tool discovery failed for '{}': {}",
+                                    name, e
+                                )))
+                                .await;
+                        }
+                        Err(_) => {
+                            let _ = tx
+                                .send(BackgroundInitMsg::Status(format!(
+                                    "Tool discovery timed out for '{}'",
+                                    name
+                                )))
+                                .await;
+                        }
+                    }
+                });
+                tasks.push(task);
+            }
+            for t in tasks {
+                let _ = t.await;
+            }
+        });
+        Some((handle, init_cancel))
+    } else {
+        None
+    };
 
     loop {
         terminal.draw(|f| render(f, app)).map_err(|e| std::io::Error::other(e.to_string()))?;
@@ -80,6 +186,54 @@ async fn run_app<B: Backend>(
 
         if last_tick.elapsed() >= tick_rate {
             app.clear_message_if_expired();
+
+            // Process background OAuth / tool-discovery results.
+            while let Ok(msg) = init_rx.try_recv() {
+                match msg {
+                    BackgroundInitMsg::Tools(server_name, tool_infos) => {
+                        let count = tool_infos.len();
+                        if let Some(cache) =
+                            app.config.tool_cache.iter_mut().find(|c| c.server == server_name)
+                        {
+                            // Merge discovered tools into existing cache.
+                            // The `enabled` field on ToolInfo is kept for backward compat
+                            // but is no longer used for logic; tool state comes from
+                            // ServerConfig.disabled_tools instead.
+                            let mut merged = Vec::new();
+                            for new_tool in tool_infos {
+                                if cache.tools.iter().any(|t| t.name == new_tool.name) {
+                                    // Tool already cached — keep the existing entry (which may
+                                    // have a description that was manually edited, etc.)
+                                    if let Some(existing) = cache.tools.iter().find(|t| t.name == new_tool.name) {
+                                        merged.push(existing.clone());
+                                    }
+                                } else {
+                                    merged.push(new_tool);
+                                }
+                            }
+                            cache.tools = merged;
+                        } else {
+                            app.config.tool_cache.push(crate::config::ToolCache {
+                                server: server_name.clone(),
+                                tools: tool_infos,
+                            });
+                        }
+                        if let Err(e) = app.save_config() {
+                            warn!("Failed to save config: {}", e);
+                            app.set_message(format!("Failed to save config: {}", e));
+                        }
+                        info!("Auto-OAuth: discovered {} tools from '{}'", count, server_name);
+                        app.set_message(format!(
+                            "Auto-OAuth: {} tools from '{}'",
+                            count, server_name
+                        ));
+                    }
+                    BackgroundInitMsg::Status(msg) => {
+                        warn!("Auto-OAuth status: {}", msg);
+                        app.set_message(msg);
+                    }
+                }
+            }
 
             // Drain audit logs from the serve background task into the UI buffer.
             // Use try_lock to avoid blocking the async executor; skip if contended.
@@ -99,8 +253,17 @@ async fn run_app<B: Backend>(
         }
 
         if app.should_quit {
+            if let Some((_, cancel)) = bg_init_handle.take() {
+                cancel.cancel();
+            }
             break;
         }
+    }
+
+    // Ensure background init task is cancelled on exit.
+    if let Some((handle, cancel)) = bg_init_handle {
+        cancel.cancel();
+        let _ = handle.await;
     }
 
     Ok(())
@@ -192,7 +355,7 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
             match app.current_tab {
                 Tab::Servers => app.prev_server(),
                 Tab::Tools => app.prev_tool(),
-                Tab::AuditLog => app.audit_scroll = app.audit_scroll.saturating_add(1),
+                Tab::AuditLog => app.audit_scroll = app.audit_scroll.saturating_sub(1),
                 _ => {}
             }
         }
@@ -200,7 +363,7 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
             match app.current_tab {
                 Tab::Servers => app.next_server(),
                 Tab::Tools => app.next_tool(),
-                Tab::AuditLog => app.audit_scroll = app.audit_scroll.saturating_sub(1),
+                Tab::AuditLog => app.audit_scroll = app.audit_scroll.saturating_add(1),
                 _ => {}
             }
         }
@@ -267,8 +430,12 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                                         });
                                     }
 
-                                    let _ = app.save_config();
-                                    info!("OAuth success for '{}', discovered {} tools", server_name, count);
+                                    if let Err(e) = app.save_config() {
+                                        warn!("Failed to save config: {}", e);
+                                        app.set_message(format!("Failed to save config: {}", e));
+                                    } else {
+                                        info!("OAuth success for '{}', discovered {} tools", server_name, count);
+                                    }
                                     app.set_message(format!(
                                         "OAuth ok for '{}'. {} tools discovered. Press Enter to view.",
                                         server_name, count
@@ -325,7 +492,7 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                 } else {
                     match start_serve(app).await {
                         Ok(()) => {
-                            app.set_message("Serve started on http://127.0.0.1:3000/mcp".to_string());
+                            app.set_message(format!("Serve started on {}{}", DEFAULT_BASE_URL, MCP_PATH));
                         }
                         Err(e) => {
                             warn!("Failed to start serve: {}", e);
@@ -336,7 +503,7 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
             }
         KeyCode::Char('t')
             if app.current_tab == Tab::Tunnel => {
-                let local_url = "http://127.0.0.1:3000".to_string();
+                let local_url = DEFAULT_BASE_URL.to_string();
 
                 if app.quick_tunnel.is_none() {
                     info!("Starting QuickTunnel");
@@ -399,48 +566,36 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
     Ok(())
 }
 
+/// Check whether a valid (non-expired) OAuth token already exists for a server.
+/// This performs NO network I/O.
+#[tracing::instrument]
+async fn check_oauth_token_exists(name: &str) -> Result<bool> {
+    let store = crate::mcp::oauth::FileCredentialStore::new(name)?;
+    Ok(store.load().await?.is_some())
+}
+
 #[tracing::instrument]
 async fn run_oauth_login(name: &str, url: &str) -> Result<()> {
-    use rmcp::transport::auth::{AuthError, OAuthState};
-
-    let mut state = OAuthState::new(url, None)
-        .await
-        .map_err(|e| crate::error::AppError::OAuth(e.to_string()))?;
-
-    match state
-        .start_authorization(
-            &[],
-            crate::mcp::oauth::OAUTH_CALLBACK_URL,
-            Some(env!("CARGO_PKG_NAME")),
-        )
-        .await
-    {
-        Ok(()) => {}
-        Err(AuthError::NoAuthorizationSupport) => {
-            return Err(crate::error::AppError::OAuth(
-                "Server does not support OAuth".to_string(),
-            ));
-        }
-        Err(e) => return Err(crate::error::AppError::OAuth(e.to_string())),
-    }
-
+    // Check if a valid (non-expired) token already exists BEFORE any network I/O.
     let store = crate::mcp::oauth::FileCredentialStore::new(name)?;
-
-    // Check if a valid (non-expired) token already exists.
     if store.load().await?.is_some() {
         return Ok(());
     }
 
-    let token_response = crate::mcp::oauth::run_pkce_flow(url).await?;
-    store.save(&token_response).await?;
+    let (client_id, token_response) = match crate::mcp::oauth::run_pkce_flow(url).await? {
+        crate::mcp::oauth::PkceFlowResult::Success { client_id, token } => (client_id, token),
+        crate::mcp::oauth::PkceFlowResult::NoAuthorizationSupport => {
+            return Err(crate::error::AppError::OAuth(
+                "Server does not support OAuth".to_string(),
+            ));
+        }
+    };
+    store.save_with_client_id(&token_response, &client_id).await?;
     Ok(())
 }
 
 #[tracing::instrument(skip(app))]
 async fn start_serve(app: &mut App) -> Result<()> {
-    const BIND_ADDR: &str = "127.0.0.1:3000";
-    const MCP_PATH: &str = "/mcp";
-
     let config = app.config.clone();
 
     let client = Arc::new(crate::mcp::client::AggregatedClient::new());
@@ -473,7 +628,7 @@ async fn start_serve(app: &mut App) -> Result<()> {
         loop {
             tokio::select! {
                 Some(log) = audit_channel.receiver.recv() => {
-                    let mut buf = audit_buffer.lock().await;
+                    let mut buf = audit_buffer.lock().unwrap();
                     buf.push(log);
                     // Cap the background buffer to prevent unbounded growth
                     const MAX_BUFFERED_AUDIT_LOGS: usize = 5000;
@@ -492,7 +647,7 @@ async fn start_serve(app: &mut App) -> Result<()> {
 
     let server = crate::server::router::AggregatedServer::new(client, audit);
 
-    let bind_addr: std::net::SocketAddr = BIND_ADDR
+    let bind_addr: std::net::SocketAddr = DEFAULT_BIND_ADDR
         .parse()
         .map_err(|e| crate::error::AppError::Mcp(format!("invalid bind address: {e}")))?;
 

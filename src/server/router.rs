@@ -14,12 +14,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::config::Config;
+use crate::constants::{DEFAULT_BIND_ADDR, MCP_PATH};
 use crate::error::Result;
 use crate::mcp::client::AggregatedClient;
 use crate::server::audit::{AuditChannel, AuditLogger};
-
-const DEFAULT_BIND_ADDR: &str = "127.0.0.1:3000";
-const MCP_PATH: &str = "/mcp";
 
 /// 聚合 MCP Server 的 handler。
 ///

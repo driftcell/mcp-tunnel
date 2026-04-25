@@ -113,15 +113,20 @@ impl QuickTunnel {
 
 /// 从 cloudflared 输出中提取 trycloudflare.com URL
 fn extract_url(line: &str) -> Option<String> {
-    // 简单提取包含 trycloudflare.com 的 URL
-    for word in line.split_whitespace() {
-        if word.contains("trycloudflare.com") {
-            let url = word.trim_matches(|c: char| {
-                !c.is_alphanumeric() && c != ':' && c != '/' && c != '.' && c != '-'
-            });
-            if url.starts_with("http") {
-                return Some(url.to_string());
-            }
+    // Find the start of https://
+    if let Some(start) = line.find("https://") {
+        let rest = &line[start..];
+        // Take until whitespace
+        let end = rest
+            .find(|c: char| c.is_whitespace())
+            .unwrap_or(rest.len());
+        let candidate = &rest[..end];
+        // Trim trailing punctuation
+        let url = candidate.trim_end_matches(|c: char| {
+            matches!(c, '.' | ',' | ')' | ']' | '"' | '\'' | '>')
+        });
+        if url.contains("trycloudflare.com") && url::Url::parse(url).is_ok() {
+            return Some(url.to_string());
         }
     }
     None

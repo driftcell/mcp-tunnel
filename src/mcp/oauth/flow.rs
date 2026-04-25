@@ -1,24 +1,125 @@
-use rmcp::transport::auth::OAuthState;
+use rmcp::transport::auth::{AuthError, OAuthState};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tracing::{info, warn};
 use url::Url;
 
+use crate::constants::{OAUTH_CALLBACK_ADDR, OAUTH_CALLBACK_URL};
 use crate::error::AppError;
-use crate::mcp::oauth::{OAUTH_CALLBACK_ADDR, OAUTH_CALLBACK_URL};
+
+/// Result of attempting the PKCE OAuth flow.
+pub enum PkceFlowResult {
+    /// Authorization succeeded; contains the client_id and token response.
+    Success {
+        /// The OAuth client_id assigned during registration.
+        client_id: String,
+        /// The token response containing access and refresh tokens.
+        token: rmcp::transport::auth::OAuthTokenResponse,
+    },
+    /// The server does not support OAuth authorization.
+    NoAuthorizationSupport,
+}
+
+/// Result of attempting to refresh an OAuth token.
+pub enum RefreshResult {
+    /// Refresh succeeded; contains the new token response.
+    Success(rmcp::transport::auth::OAuthTokenResponse),
+    /// No refresh token was available.
+    NoRefreshToken,
+    /// The server does not support OAuth authorization.
+    NoAuthorizationSupport,
+}
+
+/// Refresh an OAuth access token using a refresh token.
+///
+/// This uses rmcp's `AuthorizationManager` internally, which handles
+/// metadata discovery and token refresh automatically.
+///
+/// The `client_id` must match the one used during the original PKCE authorization.
+#[tracing::instrument(skip(refresh_token))]
+pub async fn refresh_access_token(
+    url: &str,
+    client_id: &str,
+    refresh_token: &str,
+) -> Result<RefreshResult, AppError> {
+    use rmcp::transport::auth::{
+        AuthorizationManager, CredentialStore, StoredCredentials,
+    };
+
+    // Build a token response from the refresh token so we can store it
+    // in the AuthorizationManager's credential store.
+    let mut token_response = rmcp::transport::auth::OAuthTokenResponse::new(
+        oauth2::AccessToken::new("".to_string()),
+        oauth2::basic::BasicTokenType::Bearer,
+        rmcp::transport::auth::VendorExtraTokenFields::default(),
+    );
+    token_response.set_refresh_token(Some(oauth2::RefreshToken::new(refresh_token.to_string())));
+
+    let now_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let stored = StoredCredentials::new(
+        client_id.to_string(),
+        Some(token_response),
+        Vec::new(),
+        Some(now_epoch),
+    );
+
+    // Use AuthorizationManager for metadata discovery and refresh
+    let mut manager = AuthorizationManager::new(url)
+        .await
+        .map_err(|e| AppError::OAuth(e.to_string()))?;
+
+    let metadata = match manager.discover_metadata().await {
+        Ok(m) => m,
+        Err(AuthError::NoAuthorizationSupport) => return Ok(RefreshResult::NoAuthorizationSupport),
+        Err(e) => return Err(AppError::OAuth(e.to_string())),
+    };
+
+    manager.set_metadata(metadata);
+    manager
+        .configure_client_id(client_id)
+        .map_err(|e| AppError::OAuth(e.to_string()))?;
+
+    // Seed the credential store with our stored credentials so refresh_token() can find them
+    let store = rmcp::transport::auth::InMemoryCredentialStore::new();
+    CredentialStore::save(&store, stored)
+        .await
+        .map_err(|e| AppError::OAuth(e.to_string()))?;
+    manager.set_credential_store(store);
+
+    match manager.refresh_token().await {
+        Ok(new_token) => {
+            info!("OAuth token refreshed successfully");
+            Ok(RefreshResult::Success(new_token))
+        }
+        Err(AuthError::TokenRefreshFailed(msg)) if msg.contains("No refresh token") => {
+            Ok(RefreshResult::NoRefreshToken)
+        }
+        Err(AuthError::NoAuthorizationSupport) => Ok(RefreshResult::NoAuthorizationSupport),
+        Err(e) => Err(AppError::OAuth(format!("token refresh failed: {}", e))),
+    }
+}
 
 /// Run the full PKCE OAuth flow using rmcp's OAuthState.
-/// Returns the token response on success.
+/// Returns the token response on success, or `NoAuthorizationSupport` if the
+/// server does not advertise OAuth authorization.
 #[tracing::instrument]
-pub async fn run_pkce_flow(url: &str) -> Result<rmcp::transport::auth::OAuthTokenResponse, AppError> {
+pub async fn run_pkce_flow(url: &str) -> Result<PkceFlowResult, AppError> {
     let mut state = OAuthState::new(url, None)
         .await
         .map_err(|e| AppError::OAuth(e.to_string()))?;
 
-    state
+    match state
         .start_authorization(&[], OAUTH_CALLBACK_URL, Some(env!("CARGO_PKG_NAME")))
         .await
-        .map_err(|e| AppError::OAuth(e.to_string()))?;
+    {
+        Ok(()) => {}
+        Err(AuthError::NoAuthorizationSupport) => return Ok(PkceFlowResult::NoAuthorizationSupport),
+        Err(e) => return Err(AppError::OAuth(e.to_string())),
+    }
 
     let auth_url = state
         .get_authorization_url()
@@ -44,7 +145,7 @@ pub async fn run_pkce_flow(url: &str) -> Result<rmcp::transport::auth::OAuthToke
         .await
         .map_err(|e| AppError::OAuth(e.to_string()))?;
 
-    let (_, token_response) = state
+    let (client_id, token_response) = state
         .get_credentials()
         .await
         .map_err(|e| AppError::OAuth(e.to_string()))?;
@@ -53,8 +154,8 @@ pub async fn run_pkce_flow(url: &str) -> Result<rmcp::transport::auth::OAuthToke
         AppError::OAuth("No token received after authorization".to_string())
     })?;
 
-    info!("OAuth authorization successful");
-    Ok(token_response)
+    info!("OAuth authorization successful (client_id: {})", client_id);
+    Ok(PkceFlowResult::Success { client_id, token: token_response })
 }
 
 /// Extract the `state` query parameter from an authorization URL.

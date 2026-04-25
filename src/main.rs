@@ -1,6 +1,7 @@
 mod app;
 mod cli;
 mod config;
+mod constants;
 mod error;
 mod mcp;
 mod server;

@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use oauth2::TokenResponse;
 use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
 use rmcp::service::{Peer, RoleClient, RunningService};
-use rmcp::transport::auth::{AuthError, OAuthState};
 use rmcp::transport::child_process::TokioChildProcess;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::StreamableHttpClientTransport;
@@ -98,14 +97,64 @@ impl AggregatedClient {
                 let stored_token = store.load().await?;
 
                 let token = if let Some(stored) = stored_token {
+                    // Token is still valid, use it directly
                     Some(stored.token.access_token().secret().clone())
-                } else if upstream_supports_oauth(url).await? {
-                    let new_token = crate::mcp::oauth::run_pkce_flow(url).await?;
-                    store.save(&new_token).await?;
-                    info!("OAuth token saved for server '{}'", config.name);
-                    Some(new_token.access_token().secret().clone())
                 } else {
-                    None
+                    // No valid token in store. Try to load an expired token and refresh it.
+                    let mut refreshed_token: Option<String> = None;
+
+                    if let Some(expired) = store.load_including_expired().await? {
+                        if let Some(refresh_token) = expired.refresh_token() {
+                            let client_id = expired.client_id.clone();
+
+                            if !client_id.is_empty() {
+                                match crate::mcp::oauth::refresh_access_token(
+                                    url,
+                                    &client_id,
+                                    refresh_token.secret(),
+                                ).await {
+                                    Ok(crate::mcp::oauth::RefreshResult::Success(new_token)) => {
+                                        store.save_with_client_id(&new_token, &client_id).await?;
+                                        info!("OAuth token refreshed for server '{}'", config.name);
+                                        refreshed_token = Some(new_token.access_token().secret().clone());
+                                    }
+                                    Ok(crate::mcp::oauth::RefreshResult::NoRefreshToken) => {
+                                        warn!("No refresh token available, falling back to PKCE");
+                                    }
+                                    Ok(crate::mcp::oauth::RefreshResult::NoAuthorizationSupport) => {
+                                        info!("No OAuth support for server '{}', proceeding without token", config.name);
+                                    }
+                                    Err(e) => {
+                                        warn!("Token refresh failed: {}, falling back to PKCE", e);
+                                    }
+                                }
+                            } else {
+                                warn!("Stored token has no client_id, falling back to PKCE");
+                            }
+                        } else {
+                            warn!("Expired token has no refresh token, falling back to PKCE");
+                        }
+                    }
+
+                    refreshed_token
+                };
+
+                // If we still don't have a token (refresh failed or no stored token at all),
+                // fall back to full PKCE flow.
+                let token = if let Some(t) = token {
+                    Some(t)
+                } else {
+                    match crate::mcp::oauth::run_pkce_flow(url).await? {
+                        crate::mcp::oauth::PkceFlowResult::Success { client_id, token } => {
+                            store.save_with_client_id(&token, &client_id).await?;
+                            info!("OAuth token saved for server '{}'", config.name);
+                            Some(token.access_token().secret().clone())
+                        }
+                        crate::mcp::oauth::PkceFlowResult::NoAuthorizationSupport => {
+                            info!("No OAuth support for server '{}', proceeding without token", config.name);
+                            None
+                        }
+                    }
                 };
 
                 let reqwest_client = build_reqwest_client(token.as_deref())?;
@@ -281,22 +330,3 @@ fn build_command(command: &str, args: &[String]) -> Command {
     cmd
 }
 
-/// 探测上游 HTTP 服务是否支持 OAuth。失败时回退为 false。
-async fn upstream_supports_oauth(url: &str) -> Result<bool> {
-    let mut state = OAuthState::new(url, None)
-        .await
-        .map_err(|e| AppError::OAuth(e.to_string()))?;
-
-    match state
-        .start_authorization(
-            &[],
-            crate::mcp::oauth::OAUTH_CALLBACK_URL,
-            Some(env!("CARGO_PKG_NAME")),
-        )
-        .await
-    {
-        Ok(()) => Ok(true),
-        Err(AuthError::NoAuthorizationSupport) => Ok(false),
-        Err(e) => Err(AppError::OAuth(e.to_string())),
-    }
-}

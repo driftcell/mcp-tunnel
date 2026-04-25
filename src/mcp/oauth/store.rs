@@ -11,6 +11,10 @@ pub struct StoredToken {
     #[serde(flatten)]
     pub token: OAuthTokenResponse,
     pub issue_time: DateTime<Utc>,
+    /// The OAuth client_id used during the original authorization flow.
+    /// Stored separately so we can use it for token refresh.
+    #[serde(default)]
+    pub client_id: String,
 }
 
 impl StoredToken {
@@ -24,6 +28,11 @@ impl StoredToken {
                 elapsed.to_std().map_or(true, |d| d >= duration)
             }
         }
+    }
+
+    /// Returns the refresh token if present.
+    pub fn refresh_token(&self) -> Option<&oauth2::RefreshToken> {
+        self.token.refresh_token()
     }
 }
 
@@ -42,8 +51,19 @@ impl FileCredentialStore {
     }
 
     /// Load stored OAuth token response from file.
-    /// Returns `None` if no token exists. Returns an error for invalid or expired tokens.
+    /// Returns `None` if no token exists or the token is expired.
+    /// Returns an error for invalid tokens.
     pub async fn load(&self) -> crate::error::Result<Option<StoredToken>> {
+        self.load_inner(true).await
+    }
+
+    /// Load stored OAuth token response from file, including expired tokens.
+    /// This is useful when you need the refresh token from an expired token.
+    pub async fn load_including_expired(&self) -> crate::error::Result<Option<StoredToken>> {
+        self.load_inner(false).await
+    }
+
+    async fn load_inner(&self, reject_expired: bool) -> crate::error::Result<Option<StoredToken>> {
         if !self.path.exists() {
             return Ok(None);
         }
@@ -54,7 +74,7 @@ impl FileCredentialStore {
         // Try loading as the new format (with issue_time)
         match serde_json::from_str::<StoredToken>(&json) {
             Ok(stored) => {
-                if stored.is_expired() {
+                if reject_expired && stored.is_expired() {
                     tracing::warn!("Stored OAuth token has expired");
                     return Ok(None);
                 }
@@ -69,8 +89,12 @@ impl FileCredentialStore {
         }
     }
 
-    /// Save OAuth token response to file with issue time tracking.
-    pub async fn save(&self, token: &OAuthTokenResponse) -> crate::error::Result<()> {
+    /// Save OAuth token response to file with issue time tracking and client_id.
+    pub async fn save_with_client_id(
+        &self,
+        token: &OAuthTokenResponse,
+        client_id: &str,
+    ) -> crate::error::Result<()> {
         if let Some(parent) = self.path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
@@ -79,6 +103,7 @@ impl FileCredentialStore {
         let stored = StoredToken {
             token: token.clone(),
             issue_time: Utc::now(),
+            client_id: client_id.to_string(),
         };
         let json = serde_json::to_string_pretty(&stored)
             .map_err(|e| crate::error::AppError::OAuth(e.to_string()))?;

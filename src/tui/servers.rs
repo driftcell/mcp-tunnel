@@ -116,16 +116,38 @@ fn render_add_dialog(frame: &mut Frame, app: &mut App) {
         crate::app::AddDialogType::Stdio => "Add stdio Server",
     };
 
-    let hint = match app.add_dialog_type {
-        crate::app::AddDialogType::Http => {
-            "Use CLI command instead:\n\n  mt add <name> <url>\n\nPress Esc to close."
-        }
-        crate::app::AddDialogType::Stdio => {
-            "Use CLI command instead:\n\n  mt add-stdio <name> <cmd> [args...]\n\nPress Esc to close."
-        }
+    let type_label = match app.add_dialog_type {
+        crate::app::AddDialogType::Http => "Type: HTTP",
+        crate::app::AddDialogType::Stdio => "Type: stdio",
     };
 
-    let paragraph = Paragraph::new(hint).block(
+    let value_label = match app.add_dialog_type {
+        crate::app::AddDialogType::Http => "URL:",
+        crate::app::AddDialogType::Stdio => "Command:",
+    };
+
+    let name_field = format!("Name: {}", app.add_dialog_fields.get(0).map(|s| s.as_str()).unwrap_or(""));
+    let value_field = format!("{} {}", value_label, app.add_dialog_fields.get(1).map(|s| s.as_str()).unwrap_or(""));
+
+    let hint = "Enter: confirm | Esc: cancel | Tab: next field / switch type";
+
+    let content = format!(
+        "{}\n\n{}\n{}\n\n{}",
+        type_label,
+        if app.add_dialog_focus == 0 {
+            format!("{} <--", name_field)
+        } else {
+            name_field
+        },
+        if app.add_dialog_focus == 1 {
+            format!("{} <--", value_field)
+        } else {
+            value_field
+        },
+        hint
+    );
+
+    let paragraph = Paragraph::new(content).block(
         Block::default()
             .title(title)
             .borders(Borders::ALL)
