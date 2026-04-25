@@ -8,7 +8,9 @@ use crate::app::{App, Tab, AddDialogType};
 use crate::config::{Config, ServerConfig};
 use crate::error::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use tracing::{info, warn, debug};
+use rmcp::transport::streamable_http_server::{
+    StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+};
 use ratatui::{
     backend::{Backend, CrosstermBackend},
     style::{Color, Style},
@@ -18,6 +20,9 @@ use ratatui::{
 };
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, info, warn};
 
 #[tracing::instrument(skip(config))]
 pub async fn run_tui(config: Config, config_path: PathBuf) -> Result<()> {
@@ -77,12 +82,12 @@ async fn run_app<B: Backend>(
             app.clear_message_if_expired();
 
             // Drain audit logs from the serve background task into the UI buffer.
-            if app.serve_running {
-                let mut buf = app.serve_audit_buffer.blocking_lock();
-                if !buf.is_empty() {
-                    app.audit_logs.extend(buf.drain(..));
-                }
-            }
+            // Use try_lock to avoid blocking the async executor; skip if contended.
+            if app.serve_running
+                && let Ok(mut buf) = app.serve_audit_buffer.try_lock()
+                    && !buf.is_empty() {
+                        app.audit_logs.extend(buf.drain(..));
+                    }
 
             last_tick = std::time::Instant::now();
         }
@@ -131,10 +136,15 @@ fn render(frame: &mut ratatui::Frame, app: &mut App) {
         Tab::AuditLog => audit_log::render_audit_log(frame, app, main_area),
     }
 
-    let help_text = match app.current_tab {
+    let servers_help;
+    let help_text: &str = match app.current_tab {
         Tab::Servers => {
             let serve_hint = if app.serve_running { "s:stop serve" } else { "s:serve" };
-            &format!("q:quit | Tab:switch | ↑↓:nav | Enter:tools | a:add | d:delete | {} | o:OAuth | O:clear OAuth", serve_hint)
+            servers_help = format!(
+                "q:quit | Tab:switch | ↑↓:nav | Enter:tools | a:add | d:delete | {} | o:OAuth | O:clear OAuth",
+                serve_hint
+            );
+            &servers_help
         }
         Tab::Tools => "q:quit | Tab:switch | ↑↓:nav | Space:toggle | Esc:back",
         Tab::Tunnel => "q:quit | Tab:switch | t:toggle | r:named tunnel ref",
@@ -410,14 +420,6 @@ async fn run_oauth_login(name: &str, url: &str) -> Result<()> {
 
 #[tracing::instrument(skip(app))]
 async fn start_serve(app: &mut App) -> Result<()> {
-    use rmcp::transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService,
-        session::local::LocalSessionManager,
-    };
-    use std::sync::Arc;
-    use tokio_util::sync::CancellationToken;
-    use tracing::{info, warn};
-
     const BIND_ADDR: &str = "127.0.0.1:3000";
     const MCP_PATH: &str = "/mcp";
 

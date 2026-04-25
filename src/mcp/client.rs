@@ -98,10 +98,10 @@ impl AggregatedClient {
                 let store = crate::mcp::oauth::FileCredentialStore::new(&config.name);
                 let stored_token = store.load().await?;
 
-                let token = if let Some(token) = stored_token {
+                let token = if let Some(t) = stored_token {
                     // We don't track token issue time, so we use stored tokens optimistically.
                     // If the server returns 401, the user can clear the token and re-auth.
-                    Some(token.access_token().secret().clone())
+                    Some(t.access_token().secret().clone())
                 } else if upstream_supports_oauth(url).await? {
                     let new_token = crate::mcp::oauth::run_pkce_flow(url).await?;
                     store.save(&new_token).await?;
@@ -111,37 +111,8 @@ impl AggregatedClient {
                     None
                 };
 
-                // Build reqwest client (with or without auth header)
-                let reqwest_client = if let Some(token) = token {
-                    reqwest::Client::builder()
-                        .default_headers({
-                            let mut headers = reqwest::header::HeaderMap::new();
-                            let auth_value = reqwest::header::HeaderValue::from_str(
-                                &format!("Bearer {}", token),
-                            )
-                            .map_err(|e| {
-                                AppError::OAuth(format!("invalid auth header value: {}", e))
-                            })?;
-                            headers.insert(reqwest::header::AUTHORIZATION, auth_value);
-                            headers
-                        })
-                        .build()
-                        .map_err(|e| AppError::Mcp(format!("reqwest client build error: {}", e)))?
-                } else {
-                    reqwest::Client::default()
-                };
-
-                let streamable_config = StreamableHttpClientTransportConfig::with_uri(url.as_str());
-                let streamable_transport =
-                    StreamableHttpClientTransport::with_client(reqwest_client, streamable_config);
-
-                let client = ()
-                    .serve(streamable_transport)
-                    .await
-                    .map_err(|e| AppError::Mcp(format!("streamable HTTP transport error: {}", e)))?;
-
-                let peer = client.peer().clone();
-                info!("Connected via streamable HTTP to {}", url);
+                let reqwest_client = build_reqwest_client(token.as_deref())?;
+                let (peer, service) = connect_http(url, reqwest_client).await?;
 
                 let tools = match peer.list_all_tools().await {
                     Ok(tools) => tools,
@@ -151,12 +122,10 @@ impl AggregatedClient {
                     }
                 };
 
-                let filtered_tools = apply_filter(&config, tools);
-
                 Ok(UpstreamClient {
                     peer,
-                    tools: filtered_tools,
-                    _service: client,
+                    tools: apply_filter(&config, tools),
+                    _service: service,
                 })
             }
         }
@@ -257,46 +226,55 @@ pub async fn discover_tools(config: &ServerConfig) -> Result<Vec<Tool>> {
         }
         crate::config::UpstreamType::Http { url } => {
             let store = crate::mcp::oauth::FileCredentialStore::new(&config.name);
-            let stored_token = store.load().await?;
+            let token = store
+                .load()
+                .await?
+                .map(|t| t.access_token().secret().clone());
 
-            let reqwest_client = if let Some(token) = stored_token {
-                let token_str = token.access_token().secret().clone();
-                reqwest::Client::builder()
-                    .default_headers({
-                        let mut headers = reqwest::header::HeaderMap::new();
-                        let auth_value = reqwest::header::HeaderValue::from_str(
-                            &format!("Bearer {}", token_str),
-                        )
-                        .map_err(|e| {
-                            AppError::OAuth(format!("invalid auth header value: {}", e))
-                        })?;
-                        headers.insert(reqwest::header::AUTHORIZATION, auth_value);
-                        headers
-                    })
-                    .build()
-                    .map_err(|e| AppError::Mcp(format!("reqwest client build error: {}", e)))?
-            } else {
-                reqwest::Client::default()
-            };
-
-            let streamable_config = StreamableHttpClientTransportConfig::with_uri(url.as_str());
-            let streamable_transport =
-                StreamableHttpClientTransport::with_client(reqwest_client, streamable_config);
-
-            let client = ()
-                .serve(streamable_transport)
-                .await
-                .map_err(|e| AppError::Mcp(format!("streamable HTTP transport error: {}", e)))?;
-
-            let peer = client.peer().clone();
+            let reqwest_client = build_reqwest_client(token.as_deref())?;
+            let (peer, _service) = connect_http(url, reqwest_client).await?;
             let tools = peer
                 .list_all_tools()
                 .await
                 .map_err(|e| AppError::Mcp(format!("list tools error: {}", e)))?;
             Ok(tools)
-            // `client` (RunningService) stays alive until here, keeping the transport open
+            // `_service` (RunningService) stays alive until here, keeping the transport open
         }
     }
+}
+
+/// 构建 reqwest Client，可选附带 Bearer token。
+fn build_reqwest_client(bearer_token: Option<&str>) -> Result<reqwest::Client> {
+    match bearer_token {
+        None => Ok(reqwest::Client::default()),
+        Some(token) => {
+            let mut headers = reqwest::header::HeaderMap::new();
+            let auth_value = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token))
+                .map_err(|e| AppError::OAuth(format!("invalid auth header value: {}", e)))?;
+            headers.insert(reqwest::header::AUTHORIZATION, auth_value);
+            reqwest::Client::builder()
+                .default_headers(headers)
+                .build()
+                .map_err(|e| AppError::Mcp(format!("reqwest client build error: {}", e)))
+        }
+    }
+}
+
+/// 通过 Streamable HTTP transport 连接到 MCP 服务。
+/// 返回 (Peer, RunningService)；调用方必须持有 RunningService 以保持连接存活。
+async fn connect_http(
+    url: &str,
+    reqwest_client: reqwest::Client,
+) -> Result<(Peer<RoleClient>, RunningService<RoleClient, ()>)> {
+    let config = StreamableHttpClientTransportConfig::with_uri(url);
+    let transport = StreamableHttpClientTransport::with_client(reqwest_client, config);
+    let service = ()
+        .serve(transport)
+        .await
+        .map_err(|e| AppError::Mcp(format!("streamable HTTP transport error: {}", e)))?;
+    let peer = service.peer().clone();
+    info!("Connected via streamable HTTP to {}", url);
+    Ok((peer, service))
 }
 
 /// 构建 stdio 命令
