@@ -2,11 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use oauth2::TokenResponse;
-use rmcp::model::{CallToolRequestParam, CallToolResult, Tool};
+use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
 use rmcp::service::{Peer, RoleClient};
 use rmcp::transport::auth::{AuthError, OAuthState};
 use rmcp::transport::child_process::TokioChildProcess;
-use rmcp::transport::sse_client::{SseClientConfig, SseClientTransport};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::ServiceExt;
@@ -127,7 +126,7 @@ impl AggregatedClient {
                         .await
                         .map_err(|e| AppError::OAuth(e.to_string()))?;
 
-                    let has_oauth = match state.start_authorization(&[], "http://127.0.0.1:9876/callback").await {
+                    let has_oauth = match state.start_authorization(&[], "http://127.0.0.1:9876/callback", Some("mcp-tunnel")).await {
                         Ok(()) => true,
                         Err(AuthError::NoAuthorizationSupport) => false,
                         Err(e) => return Err(AppError::OAuth(e.to_string())),
@@ -216,12 +215,13 @@ impl AggregatedClient {
             .get(upstream_name)
             .ok_or_else(|| AppError::UpstreamNotFound(upstream_name.to_string()))?;
 
-        let param = CallToolRequestParam {
+        let param = CallToolRequestParams {
             name: tool_name.to_string().into(),
             arguments: match arguments {
                 serde_json::Value::Object(map) => Some(map),
                 _ => None,
             },
+            ..Default::default()
         };
 
         client
@@ -312,42 +312,18 @@ pub async fn discover_tools(config: &ServerConfig) -> Result<Vec<Tool>> {
     }
 }
 
-/// Try streamable HTTP first, fall back to SSE.
+/// Connect via streamable HTTP.
 async fn connect_http(url: &str, reqwest_client: reqwest::Client) -> Result<Peer<RoleClient>> {
-    // Try streamable HTTP first
     let streamable_config = StreamableHttpClientTransportConfig::with_uri(url);
     let streamable_transport =
-        StreamableHttpClientTransport::with_client(reqwest_client.clone(), streamable_config);
-
-    match ().serve(streamable_transport).await {
-        Ok(client) => {
-            info!("Connected via streamable HTTP to {}", url);
-            return Ok(client.peer().clone());
-        }
-        Err(e) => {
-            warn!(
-                "Streamable HTTP failed for {}, falling back to SSE: {}",
-                url, e
-            );
-        }
-    }
-
-    // Fall back to SSE
-    let sse_config = SseClientConfig {
-        sse_endpoint: Arc::from(url),
-        ..Default::default()
-    };
-
-    let transport = SseClientTransport::start_with_client(reqwest_client, sse_config)
-        .await
-        .map_err(|e| AppError::Mcp(format!("sse transport error: {}", e)))?;
+        StreamableHttpClientTransport::with_client(reqwest_client, streamable_config);
 
     let client = ()
-        .serve(transport)
+        .serve(streamable_transport)
         .await
-        .map_err(|e| AppError::Mcp(format!("client start error: {}", e)))?;
+        .map_err(|e| AppError::Mcp(format!("streamable HTTP transport error: {}", e)))?;
 
-    info!("Connected via SSE to {}", url);
+    info!("Connected via streamable HTTP to {}", url);
     Ok(client.peer().clone())
 }
 

@@ -322,7 +322,7 @@ async fn run_oauth_login(name: &str, url: &str) -> Result<()> {
         .await
         .map_err(|e| crate::error::AppError::OAuth(e.to_string()))?;
 
-    let has_oauth = match state.start_authorization(&[], "http://127.0.0.1:9876/callback").await {
+    let has_oauth = match state.start_authorization(&[], "http://127.0.0.1:9876/callback", Some("mcp-tunnel")).await {
         Ok(()) => true,
         Err(AuthError::NoAuthorizationSupport) => false,
         Err(e) => return Err(crate::error::AppError::OAuth(e.to_string())),

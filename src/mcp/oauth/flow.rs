@@ -14,7 +14,7 @@ pub async fn run_pkce_flow(url: &str) -> Result<rmcp::transport::auth::OAuthToke
         .map_err(|e| AppError::OAuth(e.to_string()))?;
 
     state
-        .start_authorization(&[], "http://127.0.0.1:9876/callback")
+        .start_authorization(&[], "http://127.0.0.1:9876/callback", Some("mcp-tunnel"))
         .await
         .map_err(|e| AppError::OAuth(e.to_string()))?;
 
@@ -26,11 +26,11 @@ pub async fn run_pkce_flow(url: &str) -> Result<rmcp::transport::auth::OAuthToke
     info!("Opening browser for OAuth authorization: {}", auth_url);
     let _ = open::that(&auth_url);
 
-    // Start local callback server and wait for code
-    let code = wait_for_callback("127.0.0.1:9876").await?;
+    // Start local callback server and wait for code and csrf token
+    let (code, csrf_token) = wait_for_callback("127.0.0.1:9876").await?;
 
     state
-        .handle_callback(&code)
+        .handle_callback(&code, &csrf_token)
         .await
         .map_err(|e| AppError::OAuth(e.to_string()))?;
 
@@ -48,7 +48,8 @@ pub async fn run_pkce_flow(url: &str) -> Result<rmcp::transport::auth::OAuthToke
 }
 
 /// Start local TCP callback server, wait for browser redirect.
-async fn wait_for_callback(addr: &str) -> Result<String, AppError> {
+/// Returns (authorization_code, csrf_token) on success.
+async fn wait_for_callback(addr: &str) -> Result<(String, String), AppError> {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| AppError::OAuth(format!("failed to bind callback server: {}", e)))?;
@@ -71,8 +72,9 @@ async fn wait_for_callback(addr: &str) -> Result<String, AppError> {
     }
 }
 
-/// Handle a single HTTP callback request, extracting the authorization code.
-async fn handle_callback_request(mut stream: TcpStream) -> Result<String, AppError> {
+
+/// Handle a single HTTP callback request, extracting the authorization code and CSRF token.
+async fn handle_callback_request(mut stream: TcpStream) -> Result<(String, String), AppError> {
     let mut reader = BufReader::new(&mut stream);
     let mut request_line = String::new();
     reader
@@ -120,6 +122,12 @@ async fn handle_callback_request(mut stream: TcpStream) -> Result<String, AppErr
         .cloned()
         .ok_or_else(|| AppError::OAuth("missing 'code' in callback".to_string()))?;
 
+    // Extract CSRF token (state parameter)
+    let csrf_token = query
+        .get("state")
+        .cloned()
+        .ok_or_else(|| AppError::OAuth("missing 'state' in callback".to_string()))?;
+
     // Send success response to browser
     let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n\
         <!DOCTYPE html>\
@@ -131,5 +139,5 @@ async fn handle_callback_request(mut stream: TcpStream) -> Result<String, AppErr
 
     let _ = stream.write_all(response.as_bytes()).await;
 
-    Ok(code)
+    Ok((code, csrf_token))
 }

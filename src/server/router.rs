@@ -3,10 +3,12 @@ use std::sync::Arc;
 
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
-    CallToolRequestParam, CallToolResult, ErrorData as McpError, ListToolsResult, ServerInfo,
+    CallToolRequestParams, CallToolResult, ErrorData as McpError, ListToolsResult, ServerInfo,
 };
 use rmcp::service::{RequestContext, RoleServer};
-use rmcp::transport::sse_server::{SseServer, SseServerConfig};
+use rmcp::transport::streamable_http_server::{
+    LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
