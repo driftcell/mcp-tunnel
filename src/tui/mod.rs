@@ -66,7 +66,7 @@ async fn run_app<B: Backend>(
     let tick_rate = std::time::Duration::from_millis(250);
 
     loop {
-        terminal.draw(|f| render(f, app))?;
+        terminal.draw(|f| render(f, app)).map_err(|e| std::io::Error::other(e.to_string()))?;
 
         let timeout = tick_rate
             .checked_sub(last_tick.elapsed())
