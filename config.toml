@@ -1,23 +1,7 @@
 [[servers]]
 name = "notion"
 enabled_tools = []
-disabled_tools = [
-    "notion-create-comment",
-    "notion-create-database",
-    "notion-create-pages",
-    "notion-create-view",
-    "notion-duplicate-page",
-    "notion-fetch",
-    "notion-get-comments",
-    "notion-get-teams",
-    "notion-get-users",
-    "notion-move-pages",
-    "notion-query-database-view",
-    "notion-query-meeting-notes",
-    "notion-update-data-source",
-    "notion-update-page",
-    "notion-update-view",
-]
+disabled_tools = []
 
 [servers.type]
 type = "http"

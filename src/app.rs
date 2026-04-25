@@ -32,6 +32,7 @@ pub struct App {
     pub tool_list_state: ListState,
     pub selected_tool: usize,
     pub tools_for_server: Option<String>, // 当前展示工具的服务名
+    pub tools_folded: bool,               // 'f' toggles brief (folded) vs full view
 
     // Audit log
     pub audit_logs: Vec<AuditLog>,
@@ -83,6 +84,7 @@ impl App {
             tool_list_state: ListState::default(),
             selected_tool: 0,
             tools_for_server: None,
+            tools_folded: false,
             audit_logs: Vec::new(),
             audit_scroll: 0,
             tunnel_url: None,

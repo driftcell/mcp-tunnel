@@ -242,11 +242,14 @@ fn render_tools_detail(frame: &mut Frame, app: &mut App, area: Rect) {
         .unwrap_or(0);
     let enabled_count = total - disabled_count;
 
-    // Each tool card = name line + desc line + blank separator
-    const LINES_PER_TOOL: usize = 3;
-    const HEADER_LINES: usize = 2; // summary + blank line
+    let folded = app.tools_folded;
+
+    // Folded: name line + separator = 2 lines per tool
+    // Unfolded: name line + desc line + separator = 3 lines per tool
+    let lines_per_tool: usize = if folded { 2 } else { 3 };
+    let header_lines: usize = 2; // summary + blank line
     let max_visible =
-        (inner_height as usize).saturating_sub(HEADER_LINES) / LINES_PER_TOOL;
+        (inner_height as usize).saturating_sub(header_lines) / lines_per_tool;
 
     // Scroll so selected tool stays in view
     let scroll = if app.selected_tool >= max_visible {
@@ -258,9 +261,10 @@ fn render_tools_detail(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
 
     // ── Summary bar ──
+    let fold_icon = if folded { "▸" } else { "▾" };
     let summary = format!(
-        "  {} tools · {} active · {} disabled",
-        total, enabled_count, disabled_count
+        "  {} {} tools · {} active · {} disabled",
+        fold_icon, total, enabled_count, disabled_count
     );
     lines.push(Line::from(Span::styled(
         summary,
@@ -321,41 +325,44 @@ fn render_tools_detail(frame: &mut Frame, app: &mut App, area: Rect) {
             Span::styled(indicator, Style::default().fg(indicator_fg)),
         ]));
 
-        // Description line
-        let desc_prefix = format!("  {} ", border_char);
-        let desc_span = if tool.description.is_empty() {
-            Span::styled(
-                "(no description)",
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::ITALIC),
-            )
-        } else {
-            let max_desc = (inner_width as usize).saturating_sub(4);
-            let desc_text: String = if tool.description.chars().count() > max_desc {
-                let truncated: String = tool
-                    .description
-                    .chars()
-                    .take(max_desc.saturating_sub(3))
-                    .collect();
-                format!("{}...", truncated)
+        // Description line (only when unfolded)
+        if !folded {
+            let desc_prefix = format!("  {} ", border_char);
+            let desc_span = if tool.description.is_empty() {
+                Span::styled(
+                    "(no description)",
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::ITALIC),
+                )
             } else {
-                tool.description.clone()
+                let max_desc = (inner_width as usize).saturating_sub(4);
+                let desc_text: String = if tool.description.chars().count() > max_desc {
+                    let truncated: String = tool
+                        .description
+                        .chars()
+                        .take(max_desc.saturating_sub(3))
+                        .collect();
+                    format!("{}...", truncated)
+                } else {
+                    tool.description.clone()
+                };
+                Span::styled(desc_text, Style::default().fg(desc_fg))
             };
-            Span::styled(desc_text, Style::default().fg(desc_fg))
-        };
-        lines.push(Line::from(vec![
-            Span::styled(desc_prefix, Style::default().fg(border_fg)),
-            desc_span,
-        ]));
+            lines.push(Line::from(vec![
+                Span::styled(desc_prefix, Style::default().fg(border_fg)),
+                desc_span,
+            ]));
+        }
 
         // Separator line between cards
         lines.push(Line::from(""));
     }
 
+    let title = format!("Tools — {}{}", server_name, if folded { " [folded]" } else { "" });
     let paragraph = Paragraph::new(lines).block(
         Block::default()
-            .title(format!("Tools — {}", server_name))
+            .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan)),
     );

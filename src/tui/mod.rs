@@ -303,7 +303,7 @@ fn render(frame: &mut ratatui::Frame, app: &mut App) {
     let help_text: &str = match app.current_tab {
         Tab::Servers => {
             if app.show_tools {
-                tools_help = "q:quit | ↑↓:nav | Space:toggle | Esc:back | Tab:switch".to_string();
+                tools_help = "q:quit | ↑↓:nav | Space:toggle | f:fold | Esc:back | Tab:switch".to_string();
                 &tools_help
             } else {
                 let serve_hint = if app.serve_running { "s:stop serve" } else { "s:serve" };
@@ -506,6 +506,10 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
         KeyCode::Esc
             if app.current_tab == Tab::Servers && app.show_tools => {
                 app.show_tools = false;
+            }
+        KeyCode::Char('f')
+            if app.current_tab == Tab::Servers && app.show_tools => {
+                app.tools_folded = !app.tools_folded;
             }
         KeyCode::Char('s')
             if app.current_tab == Tab::Servers && !app.show_tools => {
