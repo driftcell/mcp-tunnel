@@ -36,12 +36,15 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Add { name, url }) => {
             info!("Adding HTTP upstream: {} -> {}", name, url);
             let mut config = Config::load(config_path)?;
-            config.servers.push(config::ServerConfig {
+            let server = config::ServerConfig {
                 name,
                 ty: config::UpstreamType::Http { url },
                 enabled_tools: Default::default(),
                 disabled_tools: Default::default(),
-            });
+            };
+            server.validate()
+                .map_err(|e| anyhow::anyhow!("Invalid server config: {}", e))?;
+            config.servers.push(server);
             config.save(config_path)?;
             println!("Added HTTP upstream.");
             Ok(())
@@ -53,12 +56,15 @@ async fn main() -> anyhow::Result<()> {
         }) => {
             info!("Adding stdio upstream: {} -> {} {:?}", name, command, args);
             let mut config = Config::load(config_path)?;
-            config.servers.push(config::ServerConfig {
+            let server = config::ServerConfig {
                 name,
                 ty: config::UpstreamType::Stdio { command, args },
                 enabled_tools: Default::default(),
                 disabled_tools: Default::default(),
-            });
+            };
+            server.validate()
+                .map_err(|e| anyhow::anyhow!("Invalid server config: {}", e))?;
+            config.servers.push(server);
             config.save(config_path)?;
             println!("Added stdio upstream.");
             Ok(())
@@ -73,7 +79,8 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Commands::ClearToken { name }) => {
             info!("Clearing OAuth token for server: {}", name);
-            let store = mcp::oauth::FileCredentialStore::new(&name);
+            let store = mcp::oauth::FileCredentialStore::new(&name)
+                .map_err(|e| anyhow::anyhow!("Failed to create credential store: {}", e))?;
             store
                 .clear()
                 .await
@@ -105,10 +112,14 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
+fn data_dir() -> anyhow::Result<PathBuf> {
+    dirs::data_local_dir()
+        .map(|p| p.join("mcp-tunnel"))
+        .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))
+}
+
 fn init_file_logger() -> anyhow::Result<PathBuf> {
-    let log_dir = dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("mcp-tunnel");
+    let log_dir = data_dir()?;
     std::fs::create_dir_all(&log_dir)?;
 
     let log_path = log_dir.join("mcp-tunnel.log");
@@ -117,12 +128,25 @@ fn init_file_logger() -> anyhow::Result<PathBuf> {
         .append(true)
         .open(&log_path)?;
 
+    let log_path_for_closure = log_path.clone();
+    let shared_log = std::sync::Arc::new(std::sync::Mutex::new(log_file));
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
-        .with_writer(move || log_file.try_clone().expect("failed to clone log file"))
+        .with_writer(move || {
+            let guard = shared_log.lock().unwrap();
+            guard.try_clone().unwrap_or_else(|_| {
+                // Fallback: reopen the log file if clone fails (e.g., FD limit hit)
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&log_path_for_closure)
+                    .unwrap()
+            })
+        })
         .init();
 
     Ok(log_path)

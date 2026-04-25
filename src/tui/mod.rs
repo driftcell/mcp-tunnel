@@ -83,10 +83,16 @@ async fn run_app<B: Backend>(
 
             // Drain audit logs from the serve background task into the UI buffer.
             // Use try_lock to avoid blocking the async executor; skip if contended.
+            // Cap the total audit log count to prevent unbounded growth.
             if app.serve_running
                 && let Ok(mut buf) = app.serve_audit_buffer.try_lock()
                     && !buf.is_empty() {
                         app.audit_logs.extend(buf.drain(..));
+                        const MAX_AUDIT_LOGS: usize = 10000;
+                        if app.audit_logs.len() > MAX_AUDIT_LOGS {
+                            let drop_count = app.audit_logs.len() - MAX_AUDIT_LOGS;
+                            app.audit_logs.drain(0..drop_count);
+                        }
                     }
 
             last_tick = std::time::Instant::now();
@@ -214,8 +220,13 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                 if let Some(server) = app.selected_server_config() {
                     info!("Removing server: {}", server.name);
                 }
-                app.remove_selected_server();
-                app.set_message("Server removed".to_string());
+                match app.remove_selected_server() {
+                    Ok(()) => app.set_message("Server removed".to_string()),
+                    Err(e) => {
+                        warn!("Failed to remove server: {}", e);
+                        app.set_message(format!("Failed to remove server: {}", e));
+                    }
+                }
             }
         KeyCode::Char('o')
             if app.current_tab == Tab::Servers => {
@@ -283,14 +294,24 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
             if app.current_tab == Tab::Servers => {
                 if let Some(server) = app.selected_server_config() {
                     info!("Clearing OAuth token for server: {}", server.name);
-                    let store = crate::mcp::oauth::FileCredentialStore::new(&server.name);
+                    let store = match crate::mcp::oauth::FileCredentialStore::new(&server.name) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!("Failed to create credential store: {}", e);
+                            app.set_message(format!("OAuth error: {}", e));
+                            return Ok(());
+                        }
+                    };
                     let _ = store.clear().await;
                     app.set_message(format!("OAuth token cleared for '{}'", server.name));
                 }
             }
         KeyCode::Char(' ')
             if app.current_tab == Tab::Tools => {
-                app.toggle_selected_tool();
+                if let Err(e) = app.toggle_selected_tool() {
+                    warn!("Failed to toggle tool: {}", e);
+                    app.set_message(format!("Failed to toggle tool: {}", e));
+                }
             }
         KeyCode::Esc
             if app.current_tab == Tab::Tools => {
@@ -334,8 +355,7 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                         }
                     }
                     app.quick_tunnel = Some(qt);
-                } else {
-                    let qt = app.quick_tunnel.as_mut().unwrap();
+                } else if let Some(qt) = app.quick_tunnel.as_mut() {
                     if qt.is_running() {
                         info!("Stopping QuickTunnel");
                         if let Err(e) = qt.stop().await {
@@ -367,7 +387,6 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
             }
         KeyCode::Char('r')
             if app.current_tab == Tab::Tunnel => {
-                let _ = crate::tunnel::named::run_tunnel;
                 app.set_message("Named tunnel: use CLI 'mcp-tunnel tunnel run <name>'".to_string());
             }
         KeyCode::Char('c')
@@ -405,10 +424,9 @@ async fn run_oauth_login(name: &str, url: &str) -> Result<()> {
         Err(e) => return Err(crate::error::AppError::OAuth(e.to_string())),
     }
 
-    let store = crate::mcp::oauth::FileCredentialStore::new(name);
+    let store = crate::mcp::oauth::FileCredentialStore::new(name)?;
 
-    // We can't reliably check token expiration without an issue timestamp;
-    // if a token exists, treat it as valid and let the server signal 401 to re-auth.
+    // Check if a valid (non-expired) token already exists.
     if store.load().await?.is_some() {
         return Ok(());
     }
@@ -443,13 +461,32 @@ async fn start_serve(app: &mut App) -> Result<()> {
         upstreams
     );
 
+    let ct = CancellationToken::new();
+    app.serve_cancel = Some(ct.clone());
+
     let mut audit_channel = crate::server::audit::AuditChannel::new(1000);
     let audit = crate::server::audit::AuditLogger::new(audit_channel.sender);
     let audit_buffer = app.serve_audit_buffer.clone();
 
+    let audit_ct = ct.clone();
     tokio::spawn(async move {
-        while let Some(log) = audit_channel.receiver.recv().await {
-            audit_buffer.lock().await.push(log);
+        loop {
+            tokio::select! {
+                Some(log) = audit_channel.receiver.recv() => {
+                    let mut buf = audit_buffer.lock().await;
+                    buf.push(log);
+                    // Cap the background buffer to prevent unbounded growth
+                    const MAX_BUFFERED_AUDIT_LOGS: usize = 5000;
+                    if buf.len() > MAX_BUFFERED_AUDIT_LOGS {
+                        let drop_count = buf.len() - MAX_BUFFERED_AUDIT_LOGS;
+                        buf.drain(0..drop_count);
+                    }
+                }
+                _ = audit_ct.cancelled() => {
+                    info!("Audit log receiver shutting down gracefully");
+                    break;
+                }
+            }
         }
     });
 
@@ -458,9 +495,6 @@ async fn start_serve(app: &mut App) -> Result<()> {
     let bind_addr: std::net::SocketAddr = BIND_ADDR
         .parse()
         .map_err(|e| crate::error::AppError::Mcp(format!("invalid bind address: {e}")))?;
-
-    let ct = CancellationToken::new();
-    app.serve_cancel = Some(ct.clone());
 
     let session_manager = Arc::new(LocalSessionManager::default());
     let http_config = StreamableHttpServerConfig::default().with_cancellation_token(ct.clone());
@@ -526,29 +560,35 @@ async fn handle_add_dialog_key(app: &mut App, key: crossterm::event::KeyEvent) -
             let value = app.add_dialog_fields[1].trim().to_string();
             if !name.is_empty() && !value.is_empty() {
                 let dialog_type = app.add_dialog_type;
-                match dialog_type {
+                let server = match dialog_type {
                     AddDialogType::Http => {
                         info!("Adding HTTP server: {} -> {}", name, value);
-                        app.config.servers.push(ServerConfig {
+                        ServerConfig {
                             name: name.clone(),
                             ty: crate::config::UpstreamType::Http { url: value },
                             enabled_tools: Default::default(),
                             disabled_tools: Default::default(),
-                        });
+                        }
                     }
                     AddDialogType::Stdio => {
                         let parts: Vec<&str> = value.split_whitespace().collect();
                         let cmd = parts.first().map(|s| s.to_string()).unwrap_or_default();
                         let args = parts.iter().skip(1).map(|s| s.to_string()).collect();
                         info!("Adding stdio server: {} -> {} {:?}", name, cmd, args);
-                        app.config.servers.push(ServerConfig {
+                        ServerConfig {
                             name: name.clone(),
                             ty: crate::config::UpstreamType::Stdio { command: cmd, args },
                             enabled_tools: Default::default(),
                             disabled_tools: Default::default(),
-                        });
+                        }
                     }
+                };
+                if let Err(e) = server.validate() {
+                    app.set_message(format!("Invalid server: {}", e));
+                    app.show_add_dialog = false;
+                    return Ok(());
                 }
+                app.config.servers.push(server);
                 app.save_config()?;
                 app.set_message(format!("Added server: {}", name));
             }

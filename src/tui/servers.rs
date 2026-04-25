@@ -69,14 +69,10 @@ pub fn render_servers(frame: &mut Frame, app: &mut App, area: Rect) {
             .unwrap_or(0);
         let oauth_status = {
             let token_path = dirs::data_local_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("mcp-tunnel")
-                .join("oauth")
-                .join(format!("{}.json", server.name));
-            if token_path.exists() {
-                "OAuth: Token stored"
-            } else {
-                "OAuth: No token"
+                .map(|d| d.join("mcp-tunnel").join("oauth").join(format!("{}.json", server.name)));
+            match token_path {
+                Some(p) if p.exists() => "OAuth: Token stored",
+                _ => "OAuth: No token",
             }
         };
         format!(

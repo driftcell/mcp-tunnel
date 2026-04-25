@@ -2,21 +2,22 @@
 name = "notion"
 enabled_tools = []
 disabled_tools = [
-    "notion-create-view",
-    "notion-get-teams",
-    "notion-create-pages",
     "notion-query-database-view",
-    "notion-create-comment",
-    "notion-query-meeting-notes",
-    "notion-create-database",
-    "notion-update-data-source",
-    "notion-update-view",
-    "notion-move-pages",
-    "notion-update-page",
+    "notion-get-teams",
+    "notion-fetch",
     "notion-duplicate-page",
     "notion-get-users",
+    "notion-create-pages",
     "notion-get-comments",
+    "notion-query-meeting-notes",
+    "notion-update-view",
+    "notion-create-view",
     "notion-search",
+    "notion-move-pages",
+    "notion-update-data-source",
+    "notion-create-database",
+    "notion-create-comment",
+    "notion-update-page",
 ]
 
 [servers.type]
@@ -61,7 +62,7 @@ Don't combine database URL/ID with collection:// prefix for data_source_url. Don
 \t\t<example description="User search">
 \t\t{"query": "john@example.com", "query_type": "user"}
 \t\t</example>"""
-enabled = true
+enabled = false
 
 [[tool_cache.tools]]
 name = "notion-fetch"
@@ -76,7 +77,7 @@ Set `include_discussions` to true to see discussion counts and inline discussion
 <example>{"id": "https://myspace.notion.site/Page-Title-abc123def456"}</example>
 <example>{"id": "page-uuid", "include_discussions": true}</example>
 <example>{"id": "collection://12345678-90ab-cdef-1234-567890abcdef"}</example>"""
-enabled = true
+enabled = false
 
 [[tool_cache.tools]]
 name = "notion-create-pages"
@@ -191,7 +192,7 @@ Section 2 content"
 \t\t\t]
 \t\t}
 \t\t</example>"""
-enabled = true
+enabled = false
 
 [[tool_cache.tools]]
 name = "notion-update-page"
@@ -343,17 +344,17 @@ You can verify or unverify a page using the "update_verification" command. Verif
 \t\t\t"verification_status": "unverified"
 \t\t}
 \t\t</example>"""
-enabled = true
+enabled = false
 
 [[tool_cache.tools]]
 name = "notion-move-pages"
 description = "Move one or more Notion pages or databases to a new parent."
-enabled = true
+enabled = false
 
 [[tool_cache.tools]]
 name = "notion-duplicate-page"
 description = "Duplicate a Notion page. The page must be within the current workspace, and you must have permission to access it. The duplication completes asynchronously, so do not rely on the new page identified by the returned ID or URL to be populated immediately. Let the user know that the duplication is in progress and that they can check back later using the 'fetch' tool or by clicking the returned URL and viewing it in the Notion app."
-enabled = true
+enabled = false
 
 [[tool_cache.tools]]
 name = "notion-create-database"
@@ -377,7 +378,7 @@ Type syntax:
 <example description="Task DB">{"title": "Tasks", "schema": "CREATE TABLE ("Task Name" TITLE, "Status" SELECT('To Do':red, 'Done':green), "Due Date" DATE)"}</example>
 <example description="With parent and options">{"parent": {"page_id": "f336d0bc-b841-465b-8045-024475c079dd"}, "title": "Projects", "schema": "CREATE TABLE ("Name" TITLE, "Budget" NUMBER FORMAT 'dollar', "Tags" MULTI_SELECT('eng':blue, 'design':pink), "Task ID" UNIQUE_ID PREFIX 'PRJ')"}</example>
 <example description="Self-relation (two-step: create database first, then use its data source ID with update_data_source to add self-relations)">{"title": "Tasks", "schema": "CREATE TABLE ("Name" TITLE, "Parent" RELATION('ds_id', DUAL 'Children' 'children'), "Children" RELATION('ds_id', DUAL 'Parent' 'parent'))"}</example>"""
-enabled = true
+enabled = false
 
 [[tool_cache.tools]]
 name = "notion-update-data-source"
@@ -404,7 +405,7 @@ Same type syntax as create_database. Key types:
 <example description="Update title">{"data_source_id": "f336d0bc-b841-465b-8045-024475c079dd", "title": "Project Tracker 2024"}</example>
 <example description="Trash data source">{"data_source_id": "f336d0bc-b841-465b-8045-024475c079dd", "in_trash": true}</example>
 Notes: Cannot delete/create title properties. Max one unique_id property. Cannot update synced databases. Use "fetch" first to see current schema and get the data source ID from <data-source url="collection://..."> tags."""
-enabled = true
+enabled = false
 
 [[tool_cache.tools]]
 name = "notion-create-comment"
@@ -427,7 +428,7 @@ For content targeting, use `selection_with_ellipsis` with ~10 chars from start a
 {"page_id": "uuid", "discussion_id": "discussion://pageId/blockId/discussionId",
  "rich_text": [{"text": {"content": "Reply"}}]}
 </example>"""
-enabled = true
+enabled = false
 
 [[tool_cache.tools]]
 name = "notion-get-comments"
@@ -443,7 +444,7 @@ Parameters:
 <example>{"page_id": "page-uuid"}</example>
 <example>{"page_id": "page-uuid", "include_all_blocks": true}</example>
 <example>{"page_id": "page-uuid", "discussion_id": "discussion://pageId/blockId/discussionId"}</example>"""
-enabled = true
+enabled = false
 
 [[tool_cache.tools]]
 name = "notion-get-teams"
@@ -455,7 +456,7 @@ Teams are returned split by membership status and limited to a maximum of 10 res
 2. Search for teams by name: {"query": "engineering"}
 3. Find a specific team: {"query": "Product Design"}
 </examples>"""
-enabled = true
+enabled = false
 
 [[tool_cache.tools]]
 name = "notion-get-users"
@@ -470,7 +471,7 @@ Supports cursor-based pagination to iterate through all users in the workspace.
 5. Fetch a specific user by ID: {"user_id": "00000000-0000-4000-8000-000000000000"}
 6. Fetch the current user: {"user_id": "self"}
 </examples>"""
-enabled = true
+enabled = false
 
 [[tool_cache.tools]]
 name = "notion-query-database-view"
@@ -486,7 +487,7 @@ Common use cases:
 - Query databases using pre-defined views (filters/sorts already configured), e.g. look for all tickets marked "In Progress" in a Tasks DB
 - Export filtered data for analysis
 - Generate reports from database content"""
-enabled = true
+enabled = false
 
 [[tool_cache.tools]]
 name = "notion-query-meeting-notes"
@@ -538,7 +539,7 @@ Example 5: Filter meetings by a specific attendee (use "search" tool first to ge
 Example 6: Combine attendees with date range: { "filter": { "operator": "and", "filters": [ { "property": "created_time", "filter": { "operator": "date_is_on_or_after", "value": { "type": "exact", "value": { "type": "date", "start_date": "2025-01-01" } } } }, { "property": "created_time", "filter": { "operator": "date_is_on_or_before", "value": { "type": "exact", "value": { "type": "date", "start_date": "2025-01-31" } } } }, { "property": "notion://meeting_notes/attendees", "filter": { "operator": "person_contains", "value": [ { "type": "exact", "value": { "table": "notion_user", "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890" } } ] } } ] } }
 Example 7: Filter meetings by title content: { "filter": { "operator": "and", "filters": [ { "property": "title", "filter": { "operator": "string_contains", "value": { "type": "exact", "value": "design review" } } } ] } }
 Example 8: Filter meetings matching any of several title terms (using "or"): { "filter": { "operator": "or", "filters": [ { "property": "title", "filter": { "operator": "string_contains", "value": { "type": "exact", "value": "standup" } } }, { "property": "title", "filter": { "operator": "string_contains", "value": { "type": "exact", "value": "sync" } } } ] } }"""
-enabled = true
+enabled = false
 
 [[tool_cache.tools]]
 name = "notion-create-view"
@@ -572,7 +573,7 @@ syntax. Key directives:
 <example description="Calendar view">{"database_id": "abc123", "data_source_id": "def456", "name": "Calendar", "type": "calendar", "configure": "CALENDAR BY "Due Date""}</example>
 <example description="Dashboard">{"database_id": "abc123", "data_source_id": "def456", "name": "Overview", "type": "dashboard"}</example>
 <example description="Linked view on a page">{"parent_page_id": "ghi789", "data_source_id": "def456", "name": "Company tasks", "type": "table", "configure": "FILTER "Company" = "Acme""}</example>"""
-enabled = true
+enabled = false
 
 [[tool_cache.tools]]
 name = "notion-update-view"

@@ -178,7 +178,7 @@ impl App {
         };
     }
 
-    pub fn remove_selected_server(&mut self) {
+    pub fn remove_selected_server(&mut self) -> Result<()> {
         if self.selected_server < self.config.servers.len() {
             self.config.servers.remove(self.selected_server);
             if self.config.servers.is_empty() {
@@ -188,11 +188,12 @@ impl App {
                 self.selected_server = self.config.servers.len() - 1;
                 self.server_list_state.select(Some(self.selected_server));
             }
-            let _ = self.save_config();
+            self.save_config()?;
         }
+        Ok(())
     }
 
-    pub fn toggle_selected_tool(&mut self) {
+    pub fn toggle_selected_tool(&mut self) -> Result<()> {
         if let Some(server_name) = &self.tools_for_server
             && let Some(cache) = self.config.tool_cache.iter_mut().find(|c| c.server == *server_name)
             && let Some(tool) = cache.tools.get_mut(self.selected_tool)
@@ -206,8 +207,9 @@ impl App {
                     config.disabled_tools.insert(tool.name.clone());
                 }
             }
-            let _ = self.save_config();
+            self.save_config()?;
         }
+        Ok(())
     }
 
     pub fn enter_tools_tab(&mut self) {

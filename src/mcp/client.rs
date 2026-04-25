@@ -30,9 +30,8 @@ struct UpstreamClient {
     /// 缓存的工具列表（原始名称）
     tools: Vec<Tool>,
     /// Keep the RunningService alive so the background transport task isn't cancelled.
-    /// Both stdio and HTTP use `()` as the service type, so the type is the same.
-    #[allow(dead_code)]
-    _service: RunningService<RoleClient, ()>,
+    /// This field is not read directly — its only purpose is lifetime extension via Drop.
+    _keepalive: RunningService<RoleClient, ()>,
 }
 
 impl AggregatedClient {
@@ -91,17 +90,15 @@ impl AggregatedClient {
                 Ok(UpstreamClient {
                     peer,
                     tools: filtered_tools,
-                    _service: client,
+                    _keepalive: client,
                 })
             }
             crate::config::UpstreamType::Http { url } => {
-                let store = crate::mcp::oauth::FileCredentialStore::new(&config.name);
+                let store = crate::mcp::oauth::FileCredentialStore::new(&config.name)?;
                 let stored_token = store.load().await?;
 
-                let token = if let Some(t) = stored_token {
-                    // We don't track token issue time, so we use stored tokens optimistically.
-                    // If the server returns 401, the user can clear the token and re-auth.
-                    Some(t.access_token().secret().clone())
+                let token = if let Some(stored) = stored_token {
+                    Some(stored.token.access_token().secret().clone())
                 } else if upstream_supports_oauth(url).await? {
                     let new_token = crate::mcp::oauth::run_pkce_flow(url).await?;
                     store.save(&new_token).await?;
@@ -125,7 +122,7 @@ impl AggregatedClient {
                 Ok(UpstreamClient {
                     peer,
                     tools: apply_filter(&config, tools),
-                    _service: service,
+                    _keepalive: service,
                 })
             }
         }
@@ -225,11 +222,11 @@ pub async fn discover_tools(config: &ServerConfig) -> Result<Vec<Tool>> {
             Ok(tools)
         }
         crate::config::UpstreamType::Http { url } => {
-            let store = crate::mcp::oauth::FileCredentialStore::new(&config.name);
+            let store = crate::mcp::oauth::FileCredentialStore::new(&config.name)?;
             let token = store
                 .load()
                 .await?
-                .map(|t| t.access_token().secret().clone());
+                .map(|stored| stored.token.access_token().secret().clone());
 
             let reqwest_client = build_reqwest_client(token.as_deref())?;
             let (peer, _service) = connect_http(url, reqwest_client).await?;

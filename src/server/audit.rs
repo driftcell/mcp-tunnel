@@ -62,7 +62,9 @@ impl AuditLogger {
             error: None,
             duration_ms: 0,
         };
-        let _ = self.sender.send(log).await;
+        if self.sender.send(log).await.is_err() {
+            tracing::warn!("Audit log channel closed; log entry dropped");
+        }
     }
 
     pub async fn log_response(
@@ -82,7 +84,9 @@ impl AuditLogger {
             error: None,
             duration_ms,
         };
-        let _ = self.sender.send(log).await;
+        if self.sender.send(log).await.is_err() {
+            tracing::warn!("Audit log channel closed; log entry dropped");
+        }
     }
 
     pub async fn log_error(
@@ -102,7 +106,9 @@ impl AuditLogger {
             error: Some(error),
             duration_ms,
         };
-        let _ = self.sender.send(log).await;
+        if self.sender.send(log).await.is_err() {
+            tracing::warn!("Audit log channel closed; log entry dropped");
+        }
     }
 
     pub async fn log_list(
@@ -120,6 +126,8 @@ impl AuditLogger {
             error: None,
             duration_ms: 0,
         };
-        let _ = self.sender.send(log).await;
+        if self.sender.send(log).await.is_err() {
+            tracing::warn!("Audit log channel closed; log entry dropped");
+        }
     }
 }

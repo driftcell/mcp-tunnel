@@ -1,7 +1,7 @@
 use crate::error::{AppError, Result};
 use std::process::Stdio;
 use tokio::process::{Child, Command};
-use tracing::info;
+use tracing::{info, warn};
 
 /// Quick tunnel 管理器
 pub struct QuickTunnel {
@@ -59,7 +59,15 @@ impl QuickTunnel {
         .await;
 
         if result.is_err() {
-            let _ = child.kill().await;
+            if let Err(e) = child.kill().await {
+                warn!("Failed to kill cloudflared process: {}", e);
+            }
+            // Wait for process to exit to avoid zombie processes
+            let _ = tokio::time::timeout(
+                tokio::time::Duration::from_secs(5),
+                child.wait(),
+            )
+            .await;
             return Err(AppError::Tunnel(
                 "timeout waiting for tunnel URL".to_string(),
             ));
@@ -79,7 +87,15 @@ impl QuickTunnel {
     #[tracing::instrument(skip(self))]
     pub async fn stop(&mut self) -> Result<()> {
         if let Some(mut child) = self.child.take() {
-            let _ = child.kill().await;
+            if let Err(e) = child.kill().await {
+                warn!("Failed to kill cloudflared process: {}", e);
+            }
+            // Wait for process to exit to avoid zombie processes
+            let _ = tokio::time::timeout(
+                tokio::time::Duration::from_secs(5),
+                child.wait(),
+            )
+            .await;
             info!("Quick tunnel stopped");
         }
         self.url = None;

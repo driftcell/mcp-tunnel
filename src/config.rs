@@ -88,6 +88,11 @@ impl Config {
             .map_err(|e| crate::error::AppError::Config(format!("Failed to read config file: {e}")))?;
         let config: Config = toml::from_str(&content)
             .map_err(|e| crate::error::AppError::Config(format!("Failed to parse config: {e}")))?;
+        for server in &config.servers {
+            if let Err(e) = server.validate() {
+                tracing::warn!("Invalid server config for '{}': {}", server.name, e);
+            }
+        }
         debug!("Loaded config with {} server(s)", config.servers.len());
         Ok(config)
     }
@@ -111,5 +116,43 @@ impl ServerConfig {
             return true;
         }
         self.enabled_tools.contains(tool_name)
+    }
+
+    /// Validate that the server config is well-formed.
+    pub fn validate(&self) -> crate::error::Result<()> {
+        if self.name.trim().is_empty() {
+            return Err(crate::error::AppError::Config(
+                "Server name cannot be empty".to_string(),
+            ));
+        }
+        if self.name.contains("__") {
+            return Err(crate::error::AppError::Config(format!(
+                "Server name '{}' contains reserved delimiter '__'",
+                self.name
+            )));
+        }
+        match &self.ty {
+            UpstreamType::Http { url } => {
+                if url.trim().is_empty() {
+                    return Err(crate::error::AppError::Config(
+                        "HTTP URL cannot be empty".to_string(),
+                    ));
+                }
+                if !url.starts_with("http://") && !url.starts_with("https://") {
+                    return Err(crate::error::AppError::Config(format!(
+                        "URL '{}' must start with http:// or https://",
+                        url
+                    )));
+                }
+            }
+            UpstreamType::Stdio { command, .. } => {
+                if command.trim().is_empty() {
+                    return Err(crate::error::AppError::Config(
+                        "Stdio command cannot be empty".to_string(),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 }

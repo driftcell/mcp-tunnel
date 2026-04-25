@@ -89,6 +89,7 @@ pub async fn list_tunnels() -> Result<()> {
 /// 启动具名 tunnel
 /// name: tunnel 名称
 /// local_url: 本地服务地址
+#[allow(dead_code)]
 pub async fn run_tunnel(name: &str, local_url: &str) -> Result<()> {
     let bin = super::binary::ensure_cloudflared().await?;
 

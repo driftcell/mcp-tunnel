@@ -25,11 +25,19 @@ pub async fn run_pkce_flow(url: &str) -> Result<rmcp::transport::auth::OAuthToke
         .await
         .map_err(|e| AppError::OAuth(e.to_string()))?;
 
-    info!("Opening browser for OAuth authorization: {}", auth_url);
-    let _ = open::that(&auth_url);
+    info!("Opening browser for OAuth authorization");
+    // Open browser for OAuth authorization
+    if let Err(e) = open::that(&auth_url) {
+        warn!("Failed to open browser: {}. Please navigate to the URL manually.", e);
+        println!("Please open this URL in your browser: {}", auth_url);
+    }
+
+    // Extract the CSRF state parameter from the authorization URL for validation
+    let expected_csrf = extract_state_from_url(&auth_url)
+        .ok_or_else(|| AppError::OAuth("failed to extract state from authorization URL".to_string()))?;
 
     // Start local callback server and wait for code and csrf token
-    let (code, csrf_token) = wait_for_callback(OAUTH_CALLBACK_ADDR).await?;
+    let (code, csrf_token) = wait_for_callback(OAUTH_CALLBACK_ADDR, expected_csrf).await?;
 
     state
         .handle_callback(&code, &csrf_token)
@@ -49,17 +57,27 @@ pub async fn run_pkce_flow(url: &str) -> Result<rmcp::transport::auth::OAuthToke
     Ok(token_response)
 }
 
+/// Extract the `state` query parameter from an authorization URL.
+fn extract_state_from_url(url: &str) -> Option<String> {
+    let parsed = Url::parse(url).ok()?;
+    parsed
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .map(|(_, v)| v.to_string())
+}
+
 /// Start local TCP callback server, wait for browser redirect.
+/// Validates the CSRF `state` parameter against the expected token.
 /// Returns (authorization_code, csrf_token) on success.
 #[tracing::instrument]
-async fn wait_for_callback(addr: &str) -> Result<(String, String), AppError> {
+async fn wait_for_callback(addr: &str, expected_csrf: String) -> Result<(String, String), AppError> {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| AppError::OAuth(format!("failed to bind callback server: {}", e)))?;
 
     loop {
         match listener.accept().await {
-            Ok((stream, _)) => match handle_callback_request(stream).await {
+            Ok((stream, _)) => match handle_callback_request(stream, &expected_csrf).await {
                 Ok(result) => return Ok(result),
                 Err(e) => {
                     warn!("Callback request handling error: {}", e);
@@ -77,7 +95,8 @@ async fn wait_for_callback(addr: &str) -> Result<(String, String), AppError> {
 
 
 /// Handle a single HTTP callback request, extracting the authorization code and CSRF token.
-async fn handle_callback_request(mut stream: TcpStream) -> Result<(String, String), AppError> {
+/// Validates the CSRF `state` parameter against the expected token.
+async fn handle_callback_request(mut stream: TcpStream, expected_csrf: &str) -> Result<(String, String), AppError> {
     let mut reader = BufReader::new(&mut stream);
     let mut request_line = String::new();
     reader
@@ -125,11 +144,28 @@ async fn handle_callback_request(mut stream: TcpStream) -> Result<(String, Strin
         .cloned()
         .ok_or_else(|| AppError::OAuth("missing 'code' in callback".to_string()))?;
 
-    // Extract CSRF token (state parameter)
+    // Extract CSRF token (state parameter) and validate it
     let csrf_token = query
         .get("state")
         .cloned()
         .ok_or_else(|| AppError::OAuth("missing 'state' in callback".to_string()))?;
+
+    if csrf_token != expected_csrf {
+        // Send error response to browser
+        let error_response = "HTTP/1.1 403 Forbidden\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n\
+            <!DOCTYPE html>\
+            <html><head><title>CSRF Validation Failed</title></head>\
+            <body style='font-family:sans-serif;text-align:center;padding-top:50px;'>\
+            <h1 style='color:red;'>CSRF Validation Failed</h1>\
+            <p>The authorization request could not be validated. Please try again.</p>\
+            </body></html>";
+        let _ = stream.write_all(error_response.as_bytes()).await;
+        let _ = stream.flush().await;
+        let _ = stream.shutdown().await;
+        return Err(AppError::OAuth(
+            "CSRF token validation failed: possible attack".to_string(),
+        ));
+    }
 
     // Send success response to browser
     let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n\
@@ -140,7 +176,15 @@ async fn handle_callback_request(mut stream: TcpStream) -> Result<(String, Strin
         <p>You can close this window and return to the application.</p>\
         </body></html>";
 
-    let _ = stream.write_all(response.as_bytes()).await;
+    if let Err(e) = stream.write_all(response.as_bytes()).await {
+        warn!("Failed to write OAuth callback response: {}", e);
+    }
+    if let Err(e) = stream.flush().await {
+        warn!("Failed to flush OAuth callback stream: {}", e);
+    }
+    if let Err(e) = stream.shutdown().await {
+        warn!("Failed to shutdown OAuth callback stream: {}", e);
+    }
 
     Ok((code, csrf_token))
 }

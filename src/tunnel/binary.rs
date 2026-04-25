@@ -2,20 +2,21 @@ use crate::error::{AppError, Result};
 use std::path::PathBuf;
 
 /// cloudflared 二进制文件的存放目录
-pub fn bin_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("mcp-tunnel")
+pub fn bin_dir() -> crate::error::Result<PathBuf> {
+    let dir = dirs::data_local_dir()
+        .ok_or_else(|| crate::error::AppError::Config("Could not determine data directory".to_string()))?
+        .join("mcp-tunnel");
+    Ok(dir)
 }
 
 /// cloudflared 二进制文件路径
-pub fn bin_path() -> PathBuf {
-    bin_dir().join("cloudflared")
+pub fn bin_path() -> crate::error::Result<PathBuf> {
+    Ok(bin_dir()?.join("cloudflared"))
 }
 
 /// 检查 cloudflared 是否存在，不存在则自动下载
 pub async fn ensure_cloudflared() -> Result<PathBuf> {
-    let path = bin_path();
+    let path = bin_path()?;
     if path.exists() {
         return Ok(path);
     }
@@ -28,10 +29,10 @@ pub async fn ensure_cloudflared() -> Result<PathBuf> {
 async fn download_cloudflared() -> Result<()> {
     use std::fs;
 
-    let dir = bin_dir();
+    let dir = bin_dir()?;
     fs::create_dir_all(&dir)?;
 
-    let (url, is_tgz) = get_download_url();
+    let (url, is_tgz) = get_download_url()?;
 
     println!("Downloading cloudflared from {}...", url);
 
@@ -41,6 +42,7 @@ async fn download_cloudflared() -> Result<()> {
     if is_tgz {
         // macOS ARM64 是 .tgz 格式，需要解压
         let tar_path = dir.join("cloudflared.tgz");
+        let _bin = bin_path()?;
         fs::write(&tar_path, &bytes)?;
 
         let tar_gz = flate2::read::GzDecoder::new(std::fs::File::open(&tar_path)?);
@@ -50,44 +52,45 @@ async fn download_cloudflared() -> Result<()> {
         fs::remove_file(tar_path)?;
     } else {
         // Linux 等是直接的二进制文件
-        fs::write(bin_path(), &bytes)?;
+        fs::write(bin_path()?, &bytes)?;
     }
 
     // 设置可执行权限（Unix）
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(bin_path())?.permissions();
+        let bp = bin_path()?;
+        let mut perms = fs::metadata(&bp)?.permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(bin_path(), perms)?;
+        fs::set_permissions(&bp, perms)?;
     }
 
-    println!("cloudflared downloaded to {:?}", bin_path());
+    println!("cloudflared downloaded to {:?}", bin_path()?);
     Ok(())
 }
 
 /// 根据当前平台返回下载 URL
-fn get_download_url() -> (&'static str, bool) {
+fn get_download_url() -> Result<(&'static str, bool)> {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
 
     match (os, arch) {
-        ("macos", "aarch64") => (
+        ("macos", "aarch64") => Ok((
             "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz",
             true,
-        ),
-        ("macos", "x86_64") => (
+        )),
+        ("macos", "x86_64") => Ok((
             "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64.tgz",
             true,
-        ),
-        ("linux", "x86_64") => (
+        )),
+        ("linux", "x86_64") => Ok((
             "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
             false,
-        ),
-        ("linux", "aarch64") => (
+        )),
+        ("linux", "aarch64") => Ok((
             "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64",
             false,
-        ),
-        _ => panic!("Unsupported platform: {}-{}", os, arch),
+        )),
+        _ => Err(AppError::Tunnel(format!("Unsupported platform: {}-{}", os, arch))),
     }
 }
