@@ -38,7 +38,7 @@ pub fn render_servers(frame: &mut Frame, app: &mut App, area: Rect) {
         Block::default()
             .title("Servers")
             .borders(Borders::ALL)
-            .border_style(if is_active {
+            .border_style(if is_active && !app.show_tools {
                 Style::default().fg(Color::Cyan)
             } else {
                 Style::default()
@@ -47,7 +47,15 @@ pub fn render_servers(frame: &mut Frame, app: &mut App, area: Rect) {
 
     frame.render_stateful_widget(list, list_area, &mut app.server_list_state);
 
-    // 渲染详情面板
+    // 渲染详情面板（工具列表或服务器详情）
+    if app.show_tools {
+        render_tools_detail(frame, app, detail_area);
+    } else {
+        render_server_detail(frame, app, detail_area);
+    }
+}
+
+fn render_server_detail(frame: &mut Frame, app: &App, area: Rect) {
     let detail_text = if let Some(server) = app.selected_server_config() {
         let ty_str = match &server.ty {
             crate::config::UpstreamType::Http { url } => format!("Type: HTTP\nURL: {}", url),
@@ -101,7 +109,53 @@ pub fn render_servers(frame: &mut Frame, app: &mut App, area: Rect) {
             Style::default()
         });
     let detail = Paragraph::new(detail_text).block(detail_block);
-    frame.render_widget(detail, detail_area);
+    frame.render_widget(detail, area);
+}
+
+fn render_tools_detail(frame: &mut Frame, app: &mut App, area: Rect) {
+    let server_name = app.tools_for_server.clone().unwrap_or_default();
+
+    let server_disabled_tools: Option<&std::collections::BTreeSet<String>> = app.config.servers.iter()
+        .find(|s| s.name == server_name)
+        .map(|s| &s.disabled_tools);
+
+    let items: Vec<ListItem> = if let Some(cache) = app.config.tool_cache.iter().find(|c| c.server == server_name) {
+        cache.tools.iter().enumerate().map(|(i, tool)| {
+            let disabled = server_disabled_tools
+                .map(|set| set.contains(&tool.name))
+                .unwrap_or(false);
+            let icon = if !disabled { "[x]" } else { "[ ]" };
+            let style = if i == app.selected_tool {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else if disabled {
+                Style::default().fg(Color::Gray)
+            } else {
+                Style::default()
+            };
+            let desc = if tool.description.is_empty() {
+                String::new()
+            } else {
+                let brief: String = tool.description.chars().take(50).collect();
+                if tool.description.len() > 50 {
+                    format!(" - {}...", brief)
+                } else {
+                    format!(" - {}", brief)
+                }
+            };
+            ListItem::new(format!("{} {}{}", icon, tool.name, desc))
+                .style(style)
+        }).collect()
+    } else {
+        vec![ListItem::new("No tools cached for this server.")]
+    };
+
+    let list = List::new(items)
+        .block(Block::default()
+            .title(format!("Tools - {}", server_name))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)));
+
+    frame.render_stateful_widget(list, area, &mut app.tool_list_state);
 }
 
 fn render_add_dialog(frame: &mut Frame, app: &mut App) {

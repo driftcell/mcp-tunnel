@@ -4,7 +4,6 @@ enabled_tools = []
 disabled_tools = [
     "notion-create-comment",
     "notion-create-database",
-    "notion-create-pages",
     "notion-create-view",
     "notion-duplicate-page",
     "notion-get-comments",

@@ -1,6 +1,5 @@
 pub mod layout;
 pub mod servers;
-pub mod tools;
 pub mod tunnel;
 pub mod audit_log;
 
@@ -277,12 +276,11 @@ fn render(frame: &mut ratatui::Frame, app: &mut App) {
     frame.render_widget(title, header);
 
     let (sidebar, main_area) = layout::content_layout(content);
-    let tabs = ["Servers", "Tools", "Tunnel", "Audit"];
+    let tabs = ["Servers", "Tunnel", "Audit"];
     let tab_index = match app.current_tab {
         Tab::Servers => 0,
-        Tab::Tools => 1,
-        Tab::Tunnel => 2,
-        Tab::AuditLog => 3,
+        Tab::Tunnel => 1,
+        Tab::AuditLog => 2,
     };
 
     let tab_text: Vec<Line> = tabs.iter().enumerate().map(|(i, t)| {
@@ -300,22 +298,26 @@ fn render(frame: &mut ratatui::Frame, app: &mut App) {
 
     match app.current_tab {
         Tab::Servers => servers::render_servers(frame, app, main_area),
-        Tab::Tools => tools::render_tools(frame, app, main_area),
         Tab::Tunnel => tunnel::render_tunnel(frame, app, main_area),
         Tab::AuditLog => audit_log::render_audit_log(frame, app, main_area),
     }
 
     let servers_help;
+    let tools_help;
     let help_text: &str = match app.current_tab {
         Tab::Servers => {
-            let serve_hint = if app.serve_running { "s:stop serve" } else { "s:serve" };
-            servers_help = format!(
-                "q:quit | Tab:switch | ↑↓:nav | Enter:tools | a:add | d:delete | {} | o:OAuth | O:clear OAuth",
-                serve_hint
-            );
-            &servers_help
+            if app.show_tools {
+                tools_help = "q:quit | ↑↓:nav | Space:toggle | Esc:back | Tab:switch".to_string();
+                &tools_help
+            } else {
+                let serve_hint = if app.serve_running { "s:stop serve" } else { "s:serve" };
+                servers_help = format!(
+                    "q:quit | ↑↓:nav | Enter:tools | a:add | d:delete | {} | o:OAuth | O:clear OAuth | Tab:switch",
+                    serve_hint
+                );
+                &servers_help
+            }
         }
-        Tab::Tools => "q:quit | Tab:switch | ↑↓:nav | Space:toggle | Esc:back",
         Tab::Tunnel => "q:quit | Tab:switch | t:toggle | r:named tunnel ref",
         Tab::AuditLog => "q:quit | Tab:switch | ↑↓:scroll | c:clear",
     };
@@ -352,34 +354,40 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
             app.prev_tab();
         }
         KeyCode::Up | KeyCode::Char('k') => {
-            match app.current_tab {
-                Tab::Servers => app.prev_server(),
-                Tab::Tools => app.prev_tool(),
-                Tab::AuditLog => app.audit_scroll = app.audit_scroll.saturating_sub(1),
-                _ => {}
+            if app.current_tab == Tab::Servers && app.show_tools {
+                app.prev_tool();
+            } else {
+                match app.current_tab {
+                    Tab::Servers => app.prev_server(),
+                    Tab::AuditLog => app.audit_scroll = app.audit_scroll.saturating_sub(1),
+                    _ => {}
+                }
             }
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            match app.current_tab {
-                Tab::Servers => app.next_server(),
-                Tab::Tools => app.next_tool(),
-                Tab::AuditLog => app.audit_scroll = app.audit_scroll.saturating_add(1),
-                _ => {}
+            if app.current_tab == Tab::Servers && app.show_tools {
+                app.next_tool();
+            } else {
+                match app.current_tab {
+                    Tab::Servers => app.next_server(),
+                    Tab::AuditLog => app.audit_scroll = app.audit_scroll.saturating_add(1),
+                    _ => {}
+                }
             }
         }
         KeyCode::Enter
-            if app.current_tab == Tab::Servers => {
-                app.enter_tools_tab();
+            if app.current_tab == Tab::Servers && !app.show_tools => {
+                app.enter_tools_view();
             }
         KeyCode::Char('a')
-            if app.current_tab == Tab::Servers => {
+            if app.current_tab == Tab::Servers && !app.show_tools => {
                 app.show_add_dialog = true;
                 app.add_dialog_type = AddDialogType::Http;
                 app.add_dialog_fields = vec![String::new(), String::new()];
                 app.add_dialog_focus = 0;
             }
         KeyCode::Char('d')
-            if app.current_tab == Tab::Servers => {
+            if app.current_tab == Tab::Servers && !app.show_tools => {
                 if let Some(server) = app.selected_server_config() {
                     info!("Removing server: {}", server.name);
                 }
@@ -392,7 +400,7 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                 }
             }
         KeyCode::Char('o')
-            if app.current_tab == Tab::Servers => {
+            if app.current_tab == Tab::Servers && !app.show_tools => {
                 if let Some(server) = app.selected_server_config().cloned() {
                     let server_name = server.name.clone();
                     let url = match &server.ty {
@@ -458,7 +466,7 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                 }
             }
         KeyCode::Char('O')
-            if app.current_tab == Tab::Servers => {
+            if app.current_tab == Tab::Servers && !app.show_tools => {
                 if let Some(server) = app.selected_server_config() {
                     info!("Clearing OAuth token for server: {}", server.name);
                     let store = match crate::mcp::oauth::FileCredentialStore::new(&server.name) {
@@ -474,18 +482,18 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                 }
             }
         KeyCode::Char(' ')
-            if app.current_tab == Tab::Tools => {
+            if app.current_tab == Tab::Servers && app.show_tools => {
                 if let Err(e) = app.toggle_selected_tool() {
                     warn!("Failed to toggle tool: {}", e);
                     app.set_message(format!("Failed to toggle tool: {}", e));
                 }
             }
         KeyCode::Esc
-            if app.current_tab == Tab::Tools => {
-                app.current_tab = Tab::Servers;
+            if app.current_tab == Tab::Servers && app.show_tools => {
+                app.show_tools = false;
             }
         KeyCode::Char('s')
-            if app.current_tab == Tab::Servers => {
+            if app.current_tab == Tab::Servers && !app.show_tools => {
                 if app.serve_running {
                     stop_serve(app).await;
                     app.set_message("Serve stopped".to_string());

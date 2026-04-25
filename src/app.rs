@@ -13,7 +13,6 @@ use tokio_util::sync::CancellationToken;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Tab {
     Servers,
-    Tools,
     Tunnel,
     AuditLog,
 }
@@ -28,7 +27,8 @@ pub struct App {
     pub server_list_state: ListState,
     pub selected_server: usize,
 
-    // Tools tab
+    // Tools overlay (shown in server detail panel)
+    pub show_tools: bool,
     pub tool_list_state: ListState,
     pub selected_tool: usize,
     pub tools_for_server: Option<String>, // 当前展示工具的服务名
@@ -73,6 +73,7 @@ impl App {
             should_quit: false,
             server_list_state: ListState::default(),
             selected_server: 0,
+            show_tools: false,
             tool_list_state: ListState::default(),
             selected_tool: 0,
             tools_for_server: None,
@@ -162,19 +163,19 @@ impl App {
     }
 
     pub fn next_tab(&mut self) {
+        self.show_tools = false;
         self.current_tab = match self.current_tab {
-            Tab::Servers => Tab::Tools,
-            Tab::Tools => Tab::Tunnel,
+            Tab::Servers => Tab::Tunnel,
             Tab::Tunnel => Tab::AuditLog,
             Tab::AuditLog => Tab::Servers,
         };
     }
 
     pub fn prev_tab(&mut self) {
+        self.show_tools = false;
         self.current_tab = match self.current_tab {
             Tab::Servers => Tab::AuditLog,
-            Tab::Tools => Tab::Servers,
-            Tab::Tunnel => Tab::Tools,
+            Tab::Tunnel => Tab::Servers,
             Tab::AuditLog => Tab::Tunnel,
         };
     }
@@ -212,10 +213,10 @@ impl App {
         Ok(())
     }
 
-    pub fn enter_tools_tab(&mut self) {
+    pub fn enter_tools_view(&mut self) {
         if let Some(server) = self.selected_server_config() {
             self.tools_for_server = Some(server.name.clone());
-            self.current_tab = Tab::Tools;
+            self.show_tools = true;
             self.selected_tool = 0;
             self.tool_list_state.select(Some(0));
         }
