@@ -6,15 +6,11 @@ use tracing::{info, warn};
 /// Quick tunnel 管理器
 pub struct QuickTunnel {
     child: Option<Child>,
-    url: Option<String>,
 }
 
 impl QuickTunnel {
     pub fn new() -> Self {
-        Self {
-            child: None,
-            url: None,
-        }
+        Self { child: None }
     }
 
     /// 启动 quick tunnel
@@ -79,7 +75,6 @@ impl QuickTunnel {
 
         info!("Quick tunnel started: {}", url);
         self.child = Some(child);
-        self.url = Some(url.clone());
         Ok(url)
     }
 
@@ -98,12 +93,7 @@ impl QuickTunnel {
             .await;
             info!("Quick tunnel stopped");
         }
-        self.url = None;
         Ok(())
-    }
-
-    pub fn url(&self) -> Option<&str> {
-        self.url.as_deref()
     }
 
     pub fn is_running(&self) -> bool {

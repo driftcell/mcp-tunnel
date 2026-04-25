@@ -2,3 +2,6 @@
 
 # mt config
 .config.toml
+
+# Macos
+.DS_Store

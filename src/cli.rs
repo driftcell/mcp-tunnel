@@ -41,26 +41,4 @@ pub enum Commands {
     ClearToken {
         name: String,
     },
-
-    /// Manage Cloudflare tunnel
-    Tunnel {
-        #[command(subcommand)]
-        command: TunnelCommands,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum TunnelCommands {
-    /// Login to Cloudflare
-    Login,
-    /// Create a named tunnel
-    Create {
-        name: String,
-    },
-    /// Delete a named tunnel
-    Delete {
-        name: String,
-    },
-    /// List all tunnels
-    List,
 }

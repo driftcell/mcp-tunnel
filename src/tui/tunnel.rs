@@ -34,13 +34,11 @@ fn render_status_card(frame: &mut Frame, app: &App, area: Rect, is_active: bool)
     let tunnel_mode_label = match app.config.tunnel.mode {
         crate::config::TunnelMode::Disabled => "Disabled",
         crate::config::TunnelMode::Quick => "Quick (TryCloudflare)",
-        crate::config::TunnelMode::Named => "Named",
     };
 
     let tunnel_mode_color = match app.config.tunnel.mode {
         crate::config::TunnelMode::Disabled => Color::DarkGray,
         crate::config::TunnelMode::Quick => Color::Cyan,
-        crate::config::TunnelMode::Named => Color::Magenta,
     };
 
     let serve_label = if app.serve_running {
@@ -121,49 +119,8 @@ fn render_status_card(frame: &mut Frame, app: &App, area: Rect, is_active: bool)
     frame.render_widget(paragraph, area);
 }
 
-fn render_info_panel(frame: &mut Frame, app: &App, area: Rect, is_active: bool) {
+fn render_info_panel(frame: &mut Frame, _app: &App, area: Rect, is_active: bool) {
     let mut lines: Vec<Line> = Vec::new();
-
-    // Named tunnel config
-    lines.push(Line::from(vec![
-        Span::styled(
-            "Named Tunnel",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]));
-    lines.push(Line::from(""));
-
-    let name_display = app
-        .config
-        .tunnel
-        .name
-        .as_ref()
-        .map(|s| s.as_str())
-        .unwrap_or("(not configured)");
-    lines.push(Line::from(vec![
-        Span::styled("  Name ", Style::default().fg(Color::DarkGray)),
-        Span::styled(name_display, Style::default().fg(Color::White)),
-    ]));
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  Named tunnels are managed via CLI:",
-        Style::default().fg(Color::DarkGray),
-    )));
-    lines.push(Line::from(Span::styled(
-        "  mcp-tunnel tunnel run <name>",
-        Style::default().fg(Color::Cyan),
-    )));
-
-    // Divider
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "─".repeat(area.width.saturating_sub(4) as usize),
-        Style::default().fg(Color::DarkGray),
-    )));
-    lines.push(Line::from(""));
 
     // Local endpoint info
     lines.push(Line::from(vec![

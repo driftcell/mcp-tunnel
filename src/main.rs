@@ -9,7 +9,7 @@ mod tui;
 mod tunnel;
 
 use clap::Parser;
-use cli::{Cli, Commands, TunnelCommands};
+use cli::{Cli, Commands};
 use config::Config;
 use std::path::PathBuf;
 use tracing::info;
@@ -87,27 +87,6 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to clear token: {}", e))?;
             println!("Cleared OAuth token for server '{}'.", name);
-            Ok(())
-        }
-        Some(Commands::Tunnel { command }) => {
-            match command {
-                TunnelCommands::Login => {
-                    info!("Tunnel login");
-                    tunnel::named::login().await?;
-                }
-                TunnelCommands::Create { name } => {
-                    info!("Creating tunnel: {}", name);
-                    tunnel::named::create_tunnel(&name).await?;
-                }
-                TunnelCommands::Delete { name } => {
-                    info!("Deleting tunnel: {}", name);
-                    tunnel::named::delete_tunnel(&name).await?;
-                }
-                TunnelCommands::List => {
-                    info!("Listing tunnels");
-                    tunnel::named::list_tunnels().await?;
-                }
-            }
             Ok(())
         }
     }

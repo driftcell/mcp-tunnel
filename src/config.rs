@@ -34,7 +34,6 @@ pub enum UpstreamType {
 pub struct TunnelConfig {
     #[serde(default = "default_tunnel_mode")]
     pub mode: TunnelMode,
-    pub name: Option<String>,
 }
 
 fn default_tunnel_mode() -> TunnelMode {
@@ -46,7 +45,6 @@ fn default_tunnel_mode() -> TunnelMode {
 pub enum TunnelMode {
     Disabled,
     Quick,
-    Named,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,7 +69,6 @@ impl Default for TunnelConfig {
     fn default() -> Self {
         TunnelConfig {
             mode: default_tunnel_mode(),
-            name: None,
         }
     }
 }
