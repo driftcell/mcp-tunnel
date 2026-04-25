@@ -1,7 +1,7 @@
 use crate::app::{App, Tab};
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
@@ -98,7 +98,7 @@ pub fn render_servers(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_add_dialog(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
-    let popup_area = centered_rect(50, 40, area);
+    let popup_area = crate::tui::layout::centered_rect(50, 40, area);
 
     // 清除背景
     frame.render_widget(Clear, popup_area);
@@ -127,23 +127,3 @@ fn render_add_dialog(frame: &mut Frame, app: &mut App) {
     frame.render_widget(paragraph, popup_area);
 }
 
-/// 计算居中矩形区域（百分比）
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
-}

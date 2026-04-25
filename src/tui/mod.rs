@@ -10,7 +10,6 @@ use crate::error::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
     backend::{Backend, CrosstermBackend},
-    layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
@@ -126,7 +125,7 @@ fn render(frame: &mut ratatui::Frame, app: &mut App) {
     frame.render_widget(footer_widget, footer);
 
     if let Some(ref msg) = app.message {
-        let msg_area = centered_rect(60, 20, frame.area());
+        let msg_area = layout::centered_rect(60, 20, frame.area());
         let msg_widget = Paragraph::new(msg.as_str())
             .block(Block::default().borders(Borders::ALL).title("Message"))
             .style(Style::default().fg(Color::Green));
@@ -316,39 +315,35 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
 }
 
 async fn run_oauth_login(name: &str, url: &str) -> Result<()> {
-    use rmcp::transport::auth::AuthError;
+    use rmcp::transport::auth::{AuthError, OAuthState};
 
-    let mut state = rmcp::transport::auth::OAuthState::new(url, None)
+    let mut state = OAuthState::new(url, None)
         .await
         .map_err(|e| crate::error::AppError::OAuth(e.to_string()))?;
 
-    let has_oauth = match state.start_authorization(&[], "http://127.0.0.1:9876/callback", Some("mcp-tunnel")).await {
-        Ok(()) => true,
-        Err(AuthError::NoAuthorizationSupport) => false,
+    match state
+        .start_authorization(
+            &[],
+            crate::mcp::oauth::OAUTH_CALLBACK_URL,
+            Some(env!("CARGO_PKG_NAME")),
+        )
+        .await
+    {
+        Ok(()) => {}
+        Err(AuthError::NoAuthorizationSupport) => {
+            return Err(crate::error::AppError::OAuth(
+                "Server does not support OAuth".to_string(),
+            ));
+        }
         Err(e) => return Err(crate::error::AppError::OAuth(e.to_string())),
-    };
-
-    if !has_oauth {
-        return Err(crate::error::AppError::OAuth("Server does not support OAuth".to_string()));
     }
 
     let store = crate::mcp::oauth::FileCredentialStore::new(name);
 
-    // Check if we already have valid credentials
-    if let Some(token) = store.load().await? {
-        // Check expiration using oauth2 TokenResponse trait
-        use oauth2::TokenResponse;
-        let is_expired = match token.expires_in() {
-            Some(_) => {
-                // We don't store issue time, so we can't reliably check expiration.
-                // For now, assume the token is valid and let the server tell us if not.
-                false
-            }
-            None => false,
-        };
-        if !is_expired {
-            return Ok(());
-        }
+    // We can't reliably check token expiration without an issue timestamp;
+    // if a token exists, treat it as valid and let the server signal 401 to re-auth.
+    if store.load().await?.is_some() {
+        return Ok(());
     }
 
     let token_response = crate::mcp::oauth::run_pkce_flow(url).await?;
@@ -420,23 +415,3 @@ async fn handle_add_dialog_key(app: &mut App, key: crossterm::event::KeyEvent) -
     Ok(())
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    use ratatui::layout::{Constraint, Direction, Layout};
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
-}

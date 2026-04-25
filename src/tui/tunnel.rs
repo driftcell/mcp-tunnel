@@ -16,14 +16,8 @@ pub fn render_tunnel(frame: &mut Frame, app: &mut App, area: Rect) {
     };
 
     let (status, url_text) = match app.quick_tunnel.as_ref() {
-        Some(qt) => {
-            if qt.is_running() {
-                ("Running", qt.url().unwrap_or("N/A"))
-            } else {
-                ("Stopped", "N/A")
-            }
-        }
-        None => ("Stopped", "N/A"),
+        Some(qt) if qt.is_running() => ("Running", qt.url().unwrap_or("N/A")),
+        _ => ("Stopped", "N/A"),
     };
 
     let text = format!(

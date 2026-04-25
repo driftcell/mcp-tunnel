@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use oauth2::TokenResponse;
 use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
@@ -93,54 +92,16 @@ impl AggregatedClient {
                 let stored_token = store.load().await?;
 
                 let token = if let Some(token) = stored_token {
-                    // Check if token is expired
-                    let is_expired = match token.expires_in() {
-                        Some(_expires_in) => {
-                            // The expires_in() returns a Duration from when the token was issued.
-                            // Since we don't know when it was issued, we check if the token
-                            // response has an expires_in field - if it does, we assume it might be expired.
-                            // For a more robust check, we'd need to store the issue time.
-                            // For now, if expires_in is present and short (e.g., < 60s remaining),
-                            // we consider it expired. But we don't have issue time stored.
-                            //
-                            // Simpler approach: always try to use the token first. If it fails,
-                            // the server will return 401 and we can re-auth.
-                            // For now, just use the token if we have it.
-                            false
-                        }
-                        None => false,
-                    };
-
-                    if !is_expired {
-                        Some(token.access_token().secret().clone())
-                    } else {
-                        // Token expired - run PKCE flow
-                        let new_token = crate::mcp::oauth::run_pkce_flow(url).await?;
-                        store.save(&new_token).await?;
-                        info!("OAuth token saved for server '{}'", config.name);
-                        Some(new_token.access_token().secret().clone())
-                    }
+                    // We don't track token issue time, so we use stored tokens optimistically.
+                    // If the server returns 401, the user can clear the token and re-auth.
+                    Some(token.access_token().secret().clone())
+                } else if upstream_supports_oauth(url).await? {
+                    let new_token = crate::mcp::oauth::run_pkce_flow(url).await?;
+                    store.save(&new_token).await?;
+                    info!("OAuth token saved for server '{}'", config.name);
+                    Some(new_token.access_token().secret().clone())
                 } else {
-                    // No stored token - check if server supports OAuth
-                    let mut state = OAuthState::new(url, None)
-                        .await
-                        .map_err(|e| AppError::OAuth(e.to_string()))?;
-
-                    let has_oauth = match state.start_authorization(&[], "http://127.0.0.1:9876/callback", Some("mcp-tunnel")).await {
-                        Ok(()) => true,
-                        Err(AuthError::NoAuthorizationSupport) => false,
-                        Err(e) => return Err(AppError::OAuth(e.to_string())),
-                    };
-
-                    if has_oauth {
-                        // Run PKCE flow
-                        let new_token = crate::mcp::oauth::run_pkce_flow(url).await?;
-                        store.save(&new_token).await?;
-                        info!("OAuth token saved for server '{}'", config.name);
-                        Some(new_token.access_token().secret().clone())
-                    } else {
-                        None
-                    }
+                    None
                 };
 
                 // Build reqwest client (with or without auth header)
@@ -215,14 +176,10 @@ impl AggregatedClient {
             .get(upstream_name)
             .ok_or_else(|| AppError::UpstreamNotFound(upstream_name.to_string()))?;
 
-        let param = CallToolRequestParams {
-            name: tool_name.to_string().into(),
-            arguments: match arguments {
-                serde_json::Value::Object(map) => Some(map),
-                _ => None,
-            },
-            ..Default::default()
-        };
+        let mut param = CallToolRequestParams::new(tool_name.to_string());
+        if let serde_json::Value::Object(map) = arguments {
+            param = param.with_arguments(map);
+        }
 
         client
             .peer
@@ -332,4 +289,24 @@ fn build_command(command: &str, args: &[String]) -> Command {
     let mut cmd = Command::new(command);
     cmd.args(args);
     cmd
+}
+
+/// 探测上游 HTTP 服务是否支持 OAuth。失败时回退为 false。
+async fn upstream_supports_oauth(url: &str) -> Result<bool> {
+    let mut state = OAuthState::new(url, None)
+        .await
+        .map_err(|e| AppError::OAuth(e.to_string()))?;
+
+    match state
+        .start_authorization(
+            &[],
+            crate::mcp::oauth::OAUTH_CALLBACK_URL,
+            Some(env!("CARGO_PKG_NAME")),
+        )
+        .await
+    {
+        Ok(()) => Ok(true),
+        Err(AuthError::NoAuthorizationSupport) => Ok(false),
+        Err(e) => Err(AppError::OAuth(e.to_string())),
+    }
 }

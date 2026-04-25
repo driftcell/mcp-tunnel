@@ -5,6 +5,7 @@ use tracing::{info, warn};
 use url::Url;
 
 use crate::error::AppError;
+use crate::mcp::oauth::{OAUTH_CALLBACK_ADDR, OAUTH_CALLBACK_URL};
 
 /// Run the full PKCE OAuth flow using rmcp's OAuthState.
 /// Returns the token response on success.
@@ -14,7 +15,7 @@ pub async fn run_pkce_flow(url: &str) -> Result<rmcp::transport::auth::OAuthToke
         .map_err(|e| AppError::OAuth(e.to_string()))?;
 
     state
-        .start_authorization(&[], "http://127.0.0.1:9876/callback", Some("mcp-tunnel"))
+        .start_authorization(&[], OAUTH_CALLBACK_URL, Some(env!("CARGO_PKG_NAME")))
         .await
         .map_err(|e| AppError::OAuth(e.to_string()))?;
 
@@ -27,7 +28,7 @@ pub async fn run_pkce_flow(url: &str) -> Result<rmcp::transport::auth::OAuthToke
     let _ = open::that(&auth_url);
 
     // Start local callback server and wait for code and csrf token
-    let (code, csrf_token) = wait_for_callback("127.0.0.1:9876").await?;
+    let (code, csrf_token) = wait_for_callback(OAUTH_CALLBACK_ADDR).await?;
 
     state
         .handle_callback(&code, &csrf_token)
