@@ -20,14 +20,14 @@ use super::tool_filter::prefix_tool_name;
 pub struct AggregatedClient {
     /// 上游名 -> 已连接的客户端 Peer
     clients: RwLock<HashMap<String, UpstreamClient>>,
+    /// 上游服务器配置，用于运行时工具过滤
+    configs: RwLock<Vec<ServerConfig>>,
 }
 
 /// 单个上游的客户端包装
 struct UpstreamClient {
     /// rmcp 客户端 Peer（用于发送请求）
     peer: Peer<RoleClient>,
-    /// 缓存的工具列表（原始名称）
-    tools: Vec<Tool>,
     /// Keep the RunningService alive so the background transport task isn't cancelled.
     /// This field is not read directly — its only purpose is lifetime extension via Drop.
     _keepalive: RunningService<RoleClient, ()>,
@@ -37,12 +37,17 @@ impl AggregatedClient {
     pub fn new() -> Self {
         Self {
             clients: RwLock::new(HashMap::new()),
+            configs: RwLock::new(Vec::new()),
         }
     }
 
     /// 连接到所有配置的上游服务
     #[tracing::instrument(skip(self, configs))]
     pub async fn connect_all(&self, configs: &[ServerConfig]) -> Result<()> {
+        {
+            let mut stored = self.configs.write().await;
+            *stored = configs.to_vec();
+        }
         let mut clients = self.clients.write().await;
         for config in configs {
             match Self::connect_single(config.clone()).await {
@@ -75,20 +80,8 @@ impl AggregatedClient {
 
                 let peer = client.peer().clone();
 
-                // 获取工具列表
-                let tools = match peer.list_all_tools().await {
-                    Ok(tools) => tools,
-                    Err(e) => {
-                        warn!("Failed to list tools for '{}': {}", config.name, e);
-                        Vec::new()
-                    }
-                };
-
-                let filtered_tools = apply_filter(&config, tools);
-
                 Ok(UpstreamClient {
                     peer,
-                    tools: filtered_tools,
                     _keepalive: client,
                 })
             }
@@ -160,17 +153,8 @@ impl AggregatedClient {
                 let reqwest_client = build_reqwest_client(token.as_deref())?;
                 let (peer, service) = connect_http(url, reqwest_client).await?;
 
-                let tools = match peer.list_all_tools().await {
-                    Ok(tools) => tools,
-                    Err(e) => {
-                        warn!("Failed to list tools for '{}': {}", config.name, e);
-                        Vec::new()
-                    }
-                };
-
                 Ok(UpstreamClient {
                     peer,
-                    tools: apply_filter(&config, tools),
                     _keepalive: service,
                 })
             }
@@ -178,12 +162,28 @@ impl AggregatedClient {
     }
 
     /// 获取所有聚合后的工具列表（带前缀名称）
+    /// 每次调用时动态向上游查询，不缓存
     pub async fn list_tools(&self) -> Vec<Tool> {
         let clients = self.clients.read().await;
+        let configs = self.configs.read().await;
         let mut all_tools = Vec::new();
 
         for (upstream_name, client) in clients.iter() {
-            for tool in &client.tools {
+            let tools = match client.peer.list_all_tools().await {
+                Ok(tools) => tools,
+                Err(e) => {
+                    warn!("Failed to list tools for '{}': {}", upstream_name, e);
+                    continue;
+                }
+            };
+
+            let config = configs.iter().find(|c| c.name == *upstream_name);
+            let filtered_tools = match config {
+                Some(cfg) => apply_filter(cfg, tools),
+                None => tools,
+            };
+
+            for tool in filtered_tools {
                 let mut prefixed_tool = tool.clone();
                 prefixed_tool.name =
                     prefix_tool_name(upstream_name, tool.name.as_ref()).into();
