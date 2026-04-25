@@ -8,7 +8,7 @@ Aggregate multiple upstream MCP (Model Context Protocol) services into a single 
 - **Tool namespace isolation** — Upstream tools are prefixed as `upstream_name__tool_name`
 - **Tool filtering** — Enable or disable individual tools per upstream server
 - **OAuth 2.0 PKCE** — Automatic token acquisition and storage for authenticated HTTP upstreams
-- **Cloudflare Tunnel** — Quick (temporary) and named (persistent) tunnel modes
+- **Cloudflare Tunnel** — Quick (temporary) tunnel mode
 - **Audit logging** — Track every tool list, call, response, and error
 - **Terminal UI** — Interactive ratatui-based management interface
 - **Streamable HTTP transport** — Uses rmcp 1.5 with server-side HTTP
@@ -53,12 +53,6 @@ The server binds to `127.0.0.1:3000` and exposes the MCP endpoint at `/mcp`.
 
 # Clear saved OAuth token
 ./mt clear-token notion
-
-# Cloudflare tunnel management
-./mt tunnel login
-./mt tunnel create my-tunnel
-./mt tunnel delete my-tunnel
-./mt tunnel list
 ```
 
 ## Configuration
@@ -76,7 +70,7 @@ type = "http"
 url = "https://mcp.notion.com/mcp"
 
 [tunnel]
-mode = "disabled"  # "disabled" | "quick" | "named"
+mode = "disabled"  # "disabled" | "quick"
 ```
 
 ### Server types
@@ -90,21 +84,6 @@ mode = "disabled"  # "disabled" | "quick" | "named"
 
 - `disabled_tools` — Explicitly disabled tools (takes precedence)
 - `enabled_tools` — If non-empty, only these tools are allowed; if empty, all tools are allowed except those in `disabled_tools`
-
-## Architecture
-
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   MCP Client    │────▶│  MCP Tunnel     │────▶│  Upstream A     │
-│  (Claude, etc.) │     │  (Aggregated    │     │  (HTTP/stdio)   │
-│                 │     │   MCP Server)   │────▶│  Upstream B     │
-└─────────────────┘     └─────────────────┘     │  (HTTP/stdio)   │
-                          │  TUI / CLI /     │     └─────────────────┘
-                          │  Audit Log       │
-                          │  Cloudflare      │
-                          │  Tunnel          │
-                          └─────────────────┘
-```
 
 ## Dependencies
 
