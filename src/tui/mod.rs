@@ -314,7 +314,13 @@ fn render(frame: &mut ratatui::Frame, app: &mut App) {
                 &servers_help
             }
         }
-        Tab::Tunnel => "q:quit | Tab:switch | t:toggle | r:named tunnel ref",
+        Tab::Tunnel => {
+            if app.quick_tunnel_running {
+                "q:quit | Tab:switch | t:stop | c:copy URL | o:open browser"
+            } else {
+                "q:quit | Tab:switch | t:start tunnel"
+            }
+        }
         Tab::AuditLog => "q:quit | Tab:switch | ↑↓:scroll | c:clear",
     };
     let footer_widget = Paragraph::new(help_text)
@@ -532,6 +538,25 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
             if app.current_tab == Tab::Tunnel => {
                 let local_url = DEFAULT_BASE_URL.to_string();
 
+                // Determine if we are starting (not stopping) the tunnel.
+                let is_starting = app.quick_tunnel.is_none()
+                    || app.quick_tunnel.as_ref().map_or(false, |qt| !qt.is_running());
+
+                // Auto-start serve if needed.
+                if is_starting && !app.serve_running {
+                    info!("Auto-starting serve before tunnel");
+                    match start_serve(app).await {
+                        Ok(()) => {
+                            app.set_message(format!("Serve started on {}{}", DEFAULT_BASE_URL, MCP_PATH));
+                        }
+                        Err(e) => {
+                            warn!("Failed to auto-start serve: {}", e);
+                            app.set_message(format!("Cannot start tunnel: serve failed: {}", e));
+                            return Ok(());
+                        }
+                    }
+                }
+
                 if app.quick_tunnel.is_none() {
                     info!("Starting QuickTunnel");
                     let mut qt = crate::tunnel::quick::QuickTunnel::new();
@@ -579,9 +604,42 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                     }
                 }
             }
-        KeyCode::Char('r')
+        KeyCode::Char('c')
             if app.current_tab == Tab::Tunnel => {
-                app.set_message("Named tunnel: use CLI 'mcp-tunnel tunnel run <name>'".to_string());
+                if let Some(ref url) = app.tunnel_url {
+                    let full_url = format!("{}{}", url, MCP_PATH);
+                    match arboard::Clipboard::new() {
+                        Ok(mut cb) => {
+                            if let Err(e) = cb.set_text(&full_url) {
+                                warn!("Failed to copy to clipboard: {}", e);
+                                app.set_message(format!("Copy failed: {}", e));
+                            } else {
+                                app.set_message(format!("Copied: {}", full_url));
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to access clipboard: {}", e);
+                            app.set_message(format!("Clipboard error: {}", e));
+                        }
+                    }
+                } else {
+                    app.set_message("No tunnel URL to copy".to_string());
+                }
+            }
+        KeyCode::Char('o')
+            if app.current_tab == Tab::Tunnel => {
+                if let Some(ref url) = app.tunnel_url {
+                    let full_url = format!("{}{}", url, MCP_PATH);
+                    match open::that(&full_url) {
+                        Ok(_) => app.set_message(format!("Opened: {}", full_url)),
+                        Err(e) => {
+                            warn!("Failed to open URL: {}", e);
+                            app.set_message(format!("Open failed: {}", e));
+                        }
+                    }
+                } else {
+                    app.set_message("No tunnel URL to open".to_string());
+                }
             }
         KeyCode::Char('c')
             if app.current_tab == Tab::AuditLog => {
