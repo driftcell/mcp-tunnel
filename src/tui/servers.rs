@@ -69,7 +69,6 @@ fn render_server_detail(frame: &mut Frame, app: &App, area: Rect) {
             }
         };
         let tools_count = app
-            .config
             .tool_cache
             .iter()
             .find(|c| c.server == server.name)
@@ -119,7 +118,7 @@ fn render_tools_detail(frame: &mut Frame, app: &mut App, area: Rect) {
         .find(|s| s.name == server_name)
         .map(|s| &s.disabled_tools);
 
-    let items: Vec<ListItem> = if let Some(cache) = app.config.tool_cache.iter().find(|c| c.server == server_name) {
+    let items: Vec<ListItem> = if let Some(cache) = app.tool_cache.iter().find(|c| c.server == server_name) {
         cache.tools.iter().enumerate().map(|(i, tool)| {
             let disabled = server_disabled_tools
                 .map(|set| set.contains(&tool.name))
@@ -165,9 +164,18 @@ fn render_add_dialog(frame: &mut Frame, app: &mut App) {
     // 清除背景
     frame.render_widget(Clear, popup_area);
 
-    let title = match app.add_dialog_type {
-        crate::app::AddDialogType::Http => "Add HTTP Server",
-        crate::app::AddDialogType::Stdio => "Add stdio Server",
+    let (title, hint) = if app.is_edit_mode {
+        let t = match app.add_dialog_type {
+            crate::app::AddDialogType::Http => "Edit HTTP Server",
+            crate::app::AddDialogType::Stdio => "Edit stdio Server",
+        };
+        (t, "Enter: confirm | Esc: cancel | Tab: next field")
+    } else {
+        let t = match app.add_dialog_type {
+            crate::app::AddDialogType::Http => "Add HTTP Server",
+            crate::app::AddDialogType::Stdio => "Add stdio Server",
+        };
+        (t, "Enter: confirm | Esc: cancel | Tab: next field / switch type")
     };
 
     let type_label = match app.add_dialog_type {
@@ -182,8 +190,6 @@ fn render_add_dialog(frame: &mut Frame, app: &mut App) {
 
     let name_field = format!("Name: {}", app.add_dialog_fields.get(0).map(|s| s.as_str()).unwrap_or(""));
     let value_field = format!("{} {}", value_label, app.add_dialog_fields.get(1).map(|s| s.as_str()).unwrap_or(""));
-
-    let hint = "Enter: confirm | Esc: cancel | Tab: next field / switch type";
 
     let content = format!(
         "{}\n\n{}\n{}\n\n{}",

@@ -192,7 +192,7 @@ async fn run_app<B: Backend>(
                     BackgroundInitMsg::Tools(server_name, tool_infos) => {
                         let count = tool_infos.len();
                         if let Some(cache) =
-                            app.config.tool_cache.iter_mut().find(|c| c.server == server_name)
+                            app.tool_cache.iter_mut().find(|c| c.server == server_name)
                         {
                             // Merge discovered tools into existing cache.
                             // The `enabled` field on ToolInfo is kept for backward compat
@@ -212,14 +212,10 @@ async fn run_app<B: Backend>(
                             }
                             cache.tools = merged;
                         } else {
-                            app.config.tool_cache.push(crate::config::ToolCache {
+                            app.tool_cache.push(crate::config::ToolCache {
                                 server: server_name.clone(),
                                 tools: tool_infos,
                             });
-                        }
-                        if let Err(e) = app.save_config() {
-                            warn!("Failed to save config: {}", e);
-                            app.set_message(format!("Failed to save config: {}", e));
                         }
                         info!("Auto-OAuth: discovered {} tools from '{}'", count, server_name);
                         app.set_message(format!(
@@ -312,7 +308,7 @@ fn render(frame: &mut ratatui::Frame, app: &mut App) {
             } else {
                 let serve_hint = if app.serve_running { "s:stop serve" } else { "s:serve" };
                 servers_help = format!(
-                    "q:quit | ↑↓:nav | Enter:tools | a:add | d:delete | {} | o:OAuth | O:clear OAuth | Tab:switch",
+                    "q:quit | ↑↓:nav | Enter:tools | a:add | e:edit | d:delete | {} | o:OAuth | O:clear OAuth | Tab:switch",
                     serve_hint
                 );
                 &servers_help
@@ -382,9 +378,33 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
         KeyCode::Char('a')
             if app.current_tab == Tab::Servers && !app.show_tools => {
                 app.show_add_dialog = true;
+                app.is_edit_mode = false;
                 app.add_dialog_type = AddDialogType::Http;
                 app.add_dialog_fields = vec![String::new(), String::new()];
                 app.add_dialog_focus = 0;
+            }
+        KeyCode::Char('e')
+            if app.current_tab == Tab::Servers && !app.show_tools => {
+                if let Some(server) = app.selected_server_config().cloned() {
+                    app.show_add_dialog = true;
+                    app.is_edit_mode = true;
+                    app.add_dialog_type = match server.ty {
+                        crate::config::UpstreamType::Http { .. } => AddDialogType::Http,
+                        crate::config::UpstreamType::Stdio { .. } => AddDialogType::Stdio,
+                    };
+                    let value = match &server.ty {
+                        crate::config::UpstreamType::Http { url } => url.clone(),
+                        crate::config::UpstreamType::Stdio { command, args } => {
+                            if args.is_empty() {
+                                command.clone()
+                            } else {
+                                format!("{} {}", command, args.join(" "))
+                            }
+                        }
+                    };
+                    app.add_dialog_fields = vec![server.name, value];
+                    app.add_dialog_focus = 0;
+                }
             }
         KeyCode::Char('d')
             if app.current_tab == Tab::Servers && !app.show_tools => {
@@ -429,21 +449,16 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                                     let count = tool_infos.len();
 
                                     // Update or add to tool_cache
-                                    if let Some(cache) = app.config.tool_cache.iter_mut().find(|c| c.server == server_name) {
+                                    if let Some(cache) = app.tool_cache.iter_mut().find(|c| c.server == server_name) {
                                         cache.tools = tool_infos;
                                     } else {
-                                        app.config.tool_cache.push(crate::config::ToolCache {
+                                        app.tool_cache.push(crate::config::ToolCache {
                                             server: server_name.clone(),
                                             tools: tool_infos,
                                         });
                                     }
 
-                                    if let Err(e) = app.save_config() {
-                                        warn!("Failed to save config: {}", e);
-                                        app.set_message(format!("Failed to save config: {}", e));
-                                    } else {
-                                        info!("OAuth success for '{}', discovered {} tools", server_name, count);
-                                    }
+                                    info!("OAuth success for '{}', discovered {} tools", server_name, count);
                                     app.set_message(format!(
                                         "OAuth ok for '{}'. {} tools discovered. Press Enter to view.",
                                         server_name, count
@@ -706,56 +721,118 @@ async fn handle_add_dialog_key(app: &mut App, key: crossterm::event::KeyEvent) -
     match key.code {
         KeyCode::Esc => {
             app.show_add_dialog = false;
+            app.is_edit_mode = false;
         }
         KeyCode::Tab => {
-            if app.add_dialog_focus == app.add_dialog_fields.len() - 1 {
-                app.add_dialog_type = match app.add_dialog_type {
-                    AddDialogType::Http => AddDialogType::Stdio,
-                    AddDialogType::Stdio => AddDialogType::Http,
-                };
-                app.add_dialog_focus = 0;
+            if !app.is_edit_mode {
+                if app.add_dialog_focus == app.add_dialog_fields.len() - 1 {
+                    app.add_dialog_type = match app.add_dialog_type {
+                        AddDialogType::Http => AddDialogType::Stdio,
+                        AddDialogType::Stdio => AddDialogType::Http,
+                    };
+                    app.add_dialog_focus = 0;
+                } else {
+                    app.add_dialog_focus += 1;
+                }
             } else {
-                app.add_dialog_focus += 1;
+                app.add_dialog_focus = (app.add_dialog_focus + 1) % app.add_dialog_fields.len();
             }
         }
         KeyCode::Enter => {
             let name = app.add_dialog_fields[0].trim().to_string();
             let value = app.add_dialog_fields[1].trim().to_string();
             if !name.is_empty() && !value.is_empty() {
-                let dialog_type = app.add_dialog_type;
-                let server = match dialog_type {
-                    AddDialogType::Http => {
-                        info!("Adding HTTP server: {} -> {}", name, value);
-                        ServerConfig {
-                            name: name.clone(),
-                            ty: crate::config::UpstreamType::Http { url: value },
-                            enabled_tools: Default::default(),
-                            disabled_tools: Default::default(),
+                if app.is_edit_mode {
+                    let original_name = app.config.servers.get(app.selected_server)
+                        .map(|s| s.name.clone());
+
+                    let dialog_type = app.add_dialog_type;
+                    let server = match dialog_type {
+                        AddDialogType::Http => {
+                            info!("Editing HTTP server: {} -> {}", name, value);
+                            ServerConfig {
+                                name: name.clone(),
+                                ty: crate::config::UpstreamType::Http { url: value },
+                                enabled_tools: Default::default(),
+                                disabled_tools: Default::default(),
+                            }
+                        }
+                        AddDialogType::Stdio => {
+                            let parts: Vec<&str> = value.split_whitespace().collect();
+                            let cmd = parts.first().map(|s| s.to_string()).unwrap_or_default();
+                            let args = parts.iter().skip(1).map(|s| s.to_string()).collect();
+                            info!("Editing stdio server: {} -> {} {:?}", name, cmd, args);
+                            ServerConfig {
+                                name: name.clone(),
+                                ty: crate::config::UpstreamType::Stdio { command: cmd, args },
+                                enabled_tools: Default::default(),
+                                disabled_tools: Default::default(),
+                            }
+                        }
+                    };
+                    if let Err(e) = server.validate() {
+                        app.set_message(format!("Invalid server: {}", e));
+                        app.show_add_dialog = false;
+                        app.is_edit_mode = false;
+                        return Ok(());
+                    }
+
+                    // Preserve enabled_tools and disabled_tools from original server
+                    if let Some(original) = app.config.servers.get(app.selected_server) {
+                        let mut updated = server;
+                        updated.enabled_tools = original.enabled_tools.clone();
+                        updated.disabled_tools = original.disabled_tools.clone();
+                        app.config.servers[app.selected_server] = updated;
+                    }
+
+                    // Update tool_cache server name if it changed
+                    if let Some(orig_name) = original_name {
+                        if orig_name != name {
+                            if let Some(cache) = app.tool_cache.iter_mut().find(|c| c.server == orig_name) {
+                                cache.server = name.clone();
+                            }
                         }
                     }
-                    AddDialogType::Stdio => {
-                        let parts: Vec<&str> = value.split_whitespace().collect();
-                        let cmd = parts.first().map(|s| s.to_string()).unwrap_or_default();
-                        let args = parts.iter().skip(1).map(|s| s.to_string()).collect();
-                        info!("Adding stdio server: {} -> {} {:?}", name, cmd, args);
-                        ServerConfig {
-                            name: name.clone(),
-                            ty: crate::config::UpstreamType::Stdio { command: cmd, args },
-                            enabled_tools: Default::default(),
-                            disabled_tools: Default::default(),
+
+                    app.save_config()?;
+                    app.set_message(format!("Updated server: {}", name));
+                } else {
+                    let dialog_type = app.add_dialog_type;
+                    let server = match dialog_type {
+                        AddDialogType::Http => {
+                            info!("Adding HTTP server: {} -> {}", name, value);
+                            ServerConfig {
+                                name: name.clone(),
+                                ty: crate::config::UpstreamType::Http { url: value },
+                                enabled_tools: Default::default(),
+                                disabled_tools: Default::default(),
+                            }
                         }
+                        AddDialogType::Stdio => {
+                            let parts: Vec<&str> = value.split_whitespace().collect();
+                            let cmd = parts.first().map(|s| s.to_string()).unwrap_or_default();
+                            let args = parts.iter().skip(1).map(|s| s.to_string()).collect();
+                            info!("Adding stdio server: {} -> {} {:?}", name, cmd, args);
+                            ServerConfig {
+                                name: name.clone(),
+                                ty: crate::config::UpstreamType::Stdio { command: cmd, args },
+                                enabled_tools: Default::default(),
+                                disabled_tools: Default::default(),
+                            }
+                        }
+                    };
+                    if let Err(e) = server.validate() {
+                        app.set_message(format!("Invalid server: {}", e));
+                        app.show_add_dialog = false;
+                        return Ok(());
                     }
-                };
-                if let Err(e) = server.validate() {
-                    app.set_message(format!("Invalid server: {}", e));
-                    app.show_add_dialog = false;
-                    return Ok(());
+                    app.config.servers.push(server);
+                    app.save_config()?;
+                    app.set_message(format!("Added server: {}", name));
                 }
-                app.config.servers.push(server);
-                app.save_config()?;
-                app.set_message(format!("Added server: {}", name));
             }
             app.show_add_dialog = false;
+            app.is_edit_mode = false;
         }
         KeyCode::Char(c) => {
             if let Some(field) = app.add_dialog_fields.get_mut(app.add_dialog_focus) {

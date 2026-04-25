@@ -47,6 +47,9 @@ pub struct App {
     pub serve_cancel: Option<CancellationToken>,
     pub serve_audit_buffer: Arc<Mutex<Vec<AuditLog>>>,
 
+    // Tool cache (in-memory only, not persisted)
+    pub tool_cache: Vec<crate::config::ToolCache>,
+
     // Messages (底部短暂提示)
     pub message: Option<String>,
     pub message_time: Option<Instant>,
@@ -56,6 +59,9 @@ pub struct App {
     pub add_dialog_type: AddDialogType,
     pub add_dialog_fields: Vec<String>,
     pub add_dialog_focus: usize,
+
+    // Edit mode flag (reuses add dialog UI)
+    pub is_edit_mode: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -85,12 +91,14 @@ impl App {
             serve_running: false,
             serve_cancel: None,
             serve_audit_buffer: Arc::new(Mutex::new(Vec::new())),
+            tool_cache: Vec::new(),
             message: None,
             message_time: None,
             show_add_dialog: false,
             add_dialog_type: AddDialogType::Http,
             add_dialog_fields: vec![String::new(), String::new()],
             add_dialog_focus: 0,
+            is_edit_mode: false,
         };
         if !app.config.servers.is_empty() {
             app.server_list_state.select(Some(0));
@@ -139,7 +147,7 @@ impl App {
     fn current_tools_count(&self) -> usize {
         // 从 tool_cache 中查找当前服务的工具数量
         self.tools_for_server.as_ref().and_then(|name| {
-            self.config.tool_cache.iter().find(|c| c.server == *name)
+            self.tool_cache.iter().find(|c| c.server == *name)
                 .map(|c| c.tools.len())
         }).unwrap_or(0)
     }
@@ -198,7 +206,7 @@ impl App {
     pub fn toggle_selected_tool(&mut self) -> Result<()> {
         if let Some(server_name) = &self.tools_for_server {
             if let Some(config) = self.config.servers.iter_mut().find(|s| s.name == *server_name) {
-                if let Some(cache) = self.config.tool_cache.iter().find(|c| c.server == *server_name) {
+                if let Some(cache) = self.tool_cache.iter().find(|c| c.server == *server_name) {
                     if let Some(tool) = cache.tools.get(self.selected_tool) {
                         if config.disabled_tools.contains(&tool.name) {
                             config.disabled_tools.remove(&tool.name);

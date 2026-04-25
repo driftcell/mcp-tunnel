@@ -10,8 +10,6 @@ pub struct Config {
     pub servers: Vec<ServerConfig>,
     #[serde(default)]
     pub tunnel: TunnelConfig,
-    #[serde(default)]
-    pub tool_cache: Vec<ToolCache>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
