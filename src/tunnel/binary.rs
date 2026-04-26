@@ -1,5 +1,6 @@
 use crate::error::{AppError, Result};
 use std::path::PathBuf;
+use tracing::info;
 
 /// cloudflared 二进制文件的存放目录
 pub fn bin_dir() -> crate::error::Result<PathBuf> {
@@ -34,7 +35,7 @@ async fn download_cloudflared() -> Result<()> {
 
     let (url, is_tgz) = get_download_url()?;
 
-    println!("Downloading cloudflared from {}...", url);
+    info!("Downloading cloudflared from {}...", url);
 
     let resp = reqwest::get(url).await.map_err(AppError::Http)?;
     let bytes = resp.bytes().await.map_err(AppError::Http)?;
@@ -65,7 +66,7 @@ async fn download_cloudflared() -> Result<()> {
         fs::set_permissions(&bp, perms)?;
     }
 
-    println!("cloudflared downloaded to {:?}", bin_path()?);
+    info!("cloudflared downloaded to {:?}", bin_path()?);
     Ok(())
 }
 

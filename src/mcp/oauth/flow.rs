@@ -130,7 +130,7 @@ pub async fn run_pkce_flow(url: &str) -> Result<PkceFlowResult, AppError> {
     // Open browser for OAuth authorization
     if let Err(e) = open::that(&auth_url) {
         warn!("Failed to open browser: {}. Please navigate to the URL manually.", e);
-        println!("Please open this URL in your browser: {}", auth_url);
+        info!("Please open this URL in your browser: {}", auth_url);
     }
 
     // Extract the CSRF state parameter from the authorization URL for validation

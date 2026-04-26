@@ -47,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!("Invalid server config: {}", e))?;
             config.servers.push(server);
             config.save(config_path)?;
-            println!("Added HTTP upstream.");
+            info!("Added HTTP upstream.");
             Ok(())
         }
         Some(Commands::AddStdio {
@@ -67,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!("Invalid server config: {}", e))?;
             config.servers.push(server);
             config.save(config_path)?;
-            println!("Added stdio upstream.");
+            info!("Added stdio upstream.");
             Ok(())
         }
         Some(Commands::Remove { name }) => {
@@ -75,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
             let mut config = Config::load(config_path)?;
             config.servers.retain(|s| s.name != name);
             config.save(config_path)?;
-            println!("Removed upstream '{name}'.");
+            info!("Removed upstream '{name}'.");
             Ok(())
         }
         Some(Commands::ClearToken { name }) => {
@@ -86,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
                 .clear()
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to clear token: {}", e))?;
-            println!("Cleared OAuth token for server '{}'.", name);
+            info!("Cleared OAuth token for server '{}'.", name);
             Ok(())
         }
     }
