@@ -1,5 +1,5 @@
 use crate::error::{AppError, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 /// Directory where the cloudflared binary is stored
@@ -16,8 +16,8 @@ pub fn bin_path() -> crate::error::Result<PathBuf> {
 }
 
 /// Validate that the cloudflared binary is actually executable.
-async fn validate_cloudflared(path: &PathBuf) -> Result<()> {
-    let path = path.clone();
+async fn validate_cloudflared(path: &Path) -> Result<()> {
+    let path = path.to_path_buf();
     let output = tokio::task::spawn_blocking(move || {
         std::process::Command::new(&path)
             .arg("--version")

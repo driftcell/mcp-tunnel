@@ -401,7 +401,7 @@ fn render_add_dialog(frame: &mut Frame, app: &mut App) {
         crate::app::AddDialogType::Stdio => "Command:",
     };
 
-    let name_field = format!("Name: {}", app.add_dialog_fields.get(0).map(|s| s.as_str()).unwrap_or(""));
+    let name_field = format!("Name: {}", app.add_dialog_fields.first().map(|s| s.as_str()).unwrap_or(""));
     let value_field = format!("{} {}", value_label, app.add_dialog_fields.get(1).map(|s| s.as_str()).unwrap_or(""));
 
     let content = format!(

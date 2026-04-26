@@ -5,6 +5,14 @@ use tracing::{info, debug};
 use crate::constants::DEFAULT_BIND_ADDR;
 use crate::error::Result;
 
+/// Generate a random Bearer token (32 bytes, hex-encoded = 64 chars).
+pub fn generate_token() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -37,6 +45,10 @@ pub struct TunnelConfig {
     pub mode: TunnelMode,
     #[serde(default = "default_bind_addr")]
     pub bind_addr: String,
+    /// Bearer token for protecting the /mcp endpoint.
+    /// If not set, a random token will be auto-generated on startup.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 fn default_tunnel_mode() -> TunnelMode {
@@ -77,6 +89,7 @@ impl Default for TunnelConfig {
         TunnelConfig {
             mode: default_tunnel_mode(),
             bind_addr: default_bind_addr(),
+            token: None,
         }
     }
 }

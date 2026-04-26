@@ -11,7 +11,7 @@ mod tunnel;
 use clap::Parser;
 use cli::{Cli, Commands};
 use config::Config;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::info;
 
 #[tokio::main]
@@ -24,14 +24,17 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         None => {
-            let config = Config::load(config_path)?;
+            let mut config = Config::load(config_path)?;
+            ensure_token(&mut config, config_path)?;
             tui::run_tui(config, config_path.clone()).await?;
             Ok(())
         }
         Some(Commands::Serve) => {
             info!("Starting MCP Tunnel server");
-            let config = Config::load(config_path)?;
-            server::router::start_server(&config, &config.tunnel.bind_addr).await?;
+            let mut config = Config::load(config_path)?;
+            ensure_token(&mut config, config_path)?;
+            let token = config.tunnel.token.as_deref();
+            server::router::start_server(&config, &config.tunnel.bind_addr, token).await?;
             Ok(())
         }
         Some(Commands::Add { name, url }) => {
@@ -90,6 +93,18 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+/// Ensure the tunnel token exists in config. If missing, generate one and persist.
+fn ensure_token(config: &mut Config, path: &Path) -> anyhow::Result<()> {
+    if config.tunnel.token.is_none() {
+        let token = crate::config::generate_token();
+        config.tunnel.token = Some(token.clone());
+        config.save(path)
+            .map_err(|e| anyhow::anyhow!("Failed to save generated token: {}", e))?;
+        eprintln!("Generated Bearer token: {}", token);
+    }
+    Ok(())
 }
 
 fn data_dir() -> anyhow::Result<PathBuf> {

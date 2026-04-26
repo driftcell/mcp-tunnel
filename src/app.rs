@@ -113,13 +113,12 @@ impl App {
         app
     }
 
-    #[must_use]
     pub fn save_config(&mut self) -> Result<()> {
         self.config.save(&self.config_path)
     }
 
     pub fn is_tunnel_running(&self) -> bool {
-        self.quick_tunnel.as_ref().map_or(false, |qt| qt.is_running())
+        self.quick_tunnel.as_ref().is_some_and(|qt| qt.is_running())
     }
 
     pub fn next_server(&mut self) {
@@ -216,19 +215,17 @@ impl App {
     }
 
     pub fn toggle_selected_tool(&mut self) -> Result<()> {
-        if let Some(server_name) = &self.tools_for_server {
-            if let Some(config) = self.config.servers.iter_mut().find(|s| s.name == *server_name) {
-                if let Some(cache) = self.tool_cache.iter().find(|c| c.server == *server_name) {
-                    if let Some(tool) = cache.tools.get(self.selected_tool) {
-                        if config.disabled_tools.contains(&tool.name) {
-                            config.disabled_tools.remove(&tool.name);
-                        } else {
-                            config.disabled_tools.insert(tool.name.clone());
-                        }
-                        return self.save_config();
-                    }
-                }
+        if let Some(server_name) = &self.tools_for_server
+            && let Some(config) = self.config.servers.iter_mut().find(|s| s.name == *server_name)
+            && let Some(cache) = self.tool_cache.iter().find(|c| c.server == *server_name)
+            && let Some(tool) = cache.tools.get(self.selected_tool)
+        {
+            if config.disabled_tools.contains(&tool.name) {
+                config.disabled_tools.remove(&tool.name);
+            } else {
+                config.disabled_tools.insert(tool.name.clone());
             }
+            return self.save_config();
         }
         Ok(())
     }

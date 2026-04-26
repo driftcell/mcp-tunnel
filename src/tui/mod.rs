@@ -316,9 +316,9 @@ fn render(frame: &mut ratatui::Frame, app: &mut App) {
         }
         Tab::Tunnel => {
             if app.is_tunnel_running() {
-                "q:quit | Tab:switch | t:stop | c:copy URL | o:open browser | e:edit bind"
+                "q:quit | Tab:switch | t:stop | c:copy URL | o:open browser | e:edit bind | C:copy token"
             } else {
-                "q:quit | Tab:switch | t:start tunnel | e:edit bind"
+                "q:quit | Tab:switch | t:start tunnel | e:edit bind | C:copy token"
             }
         }
         Tab::AuditLog => "q:quit | Tab:switch | ↑↓:scroll | c:clear",
@@ -570,7 +570,7 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
 
                 // Determine if we are starting (not stopping) the tunnel.
                 let is_starting = app.quick_tunnel.is_none()
-                    || app.quick_tunnel.as_ref().map_or(false, |qt| !qt.is_running());
+                    || app.quick_tunnel.as_ref().is_some_and(|qt| !qt.is_running());
 
                 // Auto-start serve if needed.
                 if is_starting && !app.serve_running {
@@ -654,6 +654,27 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                     app.set_message("No tunnel URL to copy".to_string());
                 }
             }
+        KeyCode::Char('C')
+            if app.current_tab == Tab::Tunnel => {
+                if let Some(ref token) = app.config.tunnel.token {
+                    match arboard::Clipboard::new() {
+                        Ok(mut cb) => {
+                            if let Err(e) = cb.set_text(token) {
+                                warn!("Failed to copy token to clipboard: {}", e);
+                                app.set_message(format!("Copy failed: {}", e));
+                            } else {
+                                app.set_message("Token copied to clipboard".to_string());
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to access clipboard: {}", e);
+                            app.set_message(format!("Clipboard error: {}", e));
+                        }
+                    }
+                } else {
+                    app.set_message("No token configured".to_string());
+                }
+            }
         KeyCode::Char('o')
             if app.current_tab == Tab::Tunnel => {
                 if let Some(ref url) = app.tunnel_url {
@@ -715,6 +736,7 @@ async fn run_oauth_login(name: &str, url: &str) -> Result<()> {
 #[tracing::instrument(skip(app))]
 async fn start_serve(app: &mut App) -> Result<()> {
     let config = app.config.clone();
+    let token = config.tunnel.token.as_deref();
 
     let client = Arc::new(crate::mcp::client::AggregatedClient::new());
     client.connect_all(&config.servers).await?;
@@ -784,7 +806,12 @@ async fn start_serve(app: &mut App) -> Result<()> {
         http_config,
     );
 
-    let router = axum::Router::new().nest_service(MCP_PATH, service);
+    let router = axum::Router::new()
+        .nest_service(MCP_PATH, service)
+        .layer(axum::middleware::from_fn_with_state(
+            token.map(|t| t.to_string()),
+            crate::server::router::bearer_auth_middleware,
+        ));
     let listener = tokio::net::TcpListener::bind(bind_addr)
         .await
         .map_err(|e| crate::error::AppError::Mcp(format!("bind error: {e}")))?;
@@ -933,12 +960,11 @@ async fn handle_add_dialog_key(app: &mut App, key: crossterm::event::KeyEvent) -
                     app.config.servers[app.selected_server] = server;
 
                     // Update tool_cache server name if it changed
-                    if let Some(orig_name) = original_name {
-                        if orig_name != name {
-                            if let Some(cache) = app.tool_cache.iter_mut().find(|c| c.server == orig_name) {
-                                cache.server = name.clone();
-                            }
-                        }
+                    if let Some(orig_name) = original_name
+                        && orig_name != name
+                        && let Some(cache) = app.tool_cache.iter_mut().find(|c| c.server == orig_name)
+                    {
+                        cache.server = name.clone();
                     }
 
                     app.save_config()?;

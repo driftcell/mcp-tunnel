@@ -1,6 +1,11 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum::body::Body;
+use axum::extract::State;
+use axum::http::{Request, StatusCode};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ErrorData as McpError, Implementation, ListToolsResult,
@@ -18,6 +23,32 @@ use crate::constants::MCP_PATH;
 use crate::error::Result;
 use crate::mcp::client::AggregatedClient;
 use crate::server::audit::{AuditChannel, AuditLogger};
+
+/// Bearer token auth middleware. If `expected_token` is `None`, all requests pass through.
+pub async fn bearer_auth_middleware(
+    State(expected_token): State<Option<String>>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if let Some(expected) = expected_token {
+        let auth_header = request
+            .headers()
+            .get("authorization")
+            .and_then(|h| h.to_str().ok());
+
+        match auth_header {
+            Some(header) if header.starts_with("Bearer ") => {
+                let provided = &header["Bearer ".len()..];
+                if provided != expected {
+                    return StatusCode::UNAUTHORIZED.into_response();
+                }
+            }
+            _ => return StatusCode::UNAUTHORIZED.into_response(),
+        }
+    }
+
+    next.run(request).await
+}
 
 /// Aggregated MCP Server handler.
 ///
@@ -143,7 +174,7 @@ impl ServerHandler for AggregatedServer {
 /// 2. Create the audit log channel
 /// 3. Start the axum HTTP server, mounting StreamableHttpService at /mcp
 #[tracing::instrument(skip(config))]
-pub async fn start_server(config: &Config, bind_addr: &str) -> Result<()> {
+pub async fn start_server(config: &Config, bind_addr: &str, token: Option<&str>) -> Result<()> {
     let client = Arc::new(AggregatedClient::new());
     client.connect_all(&config.servers).await?;
 
@@ -199,7 +230,10 @@ pub async fn start_server(config: &Config, bind_addr: &str) -> Result<()> {
         http_config,
     );
 
-    let router = axum::Router::new().nest_service(MCP_PATH, service);
+    let token_state = token.map(|t| t.to_string());
+    let router = axum::Router::new()
+        .nest_service(MCP_PATH, service)
+        .layer(middleware::from_fn_with_state(token_state, bearer_auth_middleware));
     let listener = tokio::net::TcpListener::bind(bind_addr)
         .await
         .map_err(|e| crate::error::AppError::Mcp(format!("bind error: {}", e)))?;

@@ -15,7 +15,7 @@ pub fn render_tunnel(frame: &mut Frame, app: &mut App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(12), // Status card
+            Constraint::Length(14), // Status card
             Constraint::Min(6),     // Info / endpoints
         ])
         .spacing(1)
@@ -95,11 +95,30 @@ fn render_status_card(frame: &mut Frame, app: &App, area: Rect, is_active: bool)
 
     lines.push(Line::from(""));
 
+    // Token block
+    let token_display = app
+        .config
+        .tunnel
+        .token
+        .as_ref()
+        .map(|t| {
+            if t.len() > 12 {
+                format!("{}...{}", &t[..6], &t[t.len() - 6..])
+            } else {
+                t.clone()
+            }
+        })
+        .unwrap_or_else(|| "Not set".to_string());
+    lines.push(Line::from(vec![
+        Span::styled("  Token   ", Style::default().fg(Color::DarkGray)),
+        Span::styled(token_display, Style::default().fg(Color::Gray)),
+    ]));
+
     // Quick hints
     let hints = if app.is_tunnel_running() {
-        "  'c' = copy URL  |  'o' = open browser  |  't' = stop  |  'e' = edit bind"
+        "  'c' = copy URL  |  'o' = open browser  |  't' = stop  |  'e' = edit bind  |  'C' = copy token"
     } else {
-        "  't' = start tunnel  |  'e' = edit bind address"
+        "  't' = start tunnel  |  'e' = edit bind address  |  'C' = copy token"
     };
     lines.push(Line::from(Span::styled(
         hints,
