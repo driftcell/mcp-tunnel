@@ -6,6 +6,7 @@ use axum::extract::State;
 use axum::http::{Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
+use opentelemetry::KeyValue;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ErrorData as McpError, Implementation, ListToolsResult,
@@ -22,9 +23,11 @@ use crate::config::Config;
 use crate::constants::MCP_PATH;
 use crate::error::Result;
 use crate::mcp::client::AggregatedClient;
+use crate::otel::metrics::{list_tools_total, tool_call_duration, tool_call_errors_total, tool_calls_total};
 use crate::server::audit::{AuditChannel, AuditLogger};
 
 /// Bearer token auth middleware. If `expected_token` is `None`, all requests pass through.
+#[tracing::instrument(skip(request, next), fields(otel.kind = "server"))]
 pub async fn bearer_auth_middleware(
     State(expected_token): State<Option<String>>,
     request: Request<Body>,
@@ -80,12 +83,16 @@ impl ServerHandler for AggregatedServer {
     }
 
     /// Handle tools/list request: return the aggregated tool list.
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(
+        skip(self, _request, _context),
+        fields(otel.kind = "server")
+    )]
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListToolsResult, McpError> {
+        list_tools_total().add(1, &[]);
         let tools = self.client.list_tools().await.map_err(|e| {
             McpError::internal_error(format!("failed to list tools: {}", e), None)
         })?;
@@ -107,7 +114,14 @@ impl ServerHandler for AggregatedServer {
     }
 
     /// Handle tools/call request: parse the tool name prefix and route to the corresponding upstream.
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(
+        skip(self, _context),
+        fields(
+            otel.kind = "internal",
+            tool.name = tracing::field::Empty,
+            upstream.name = tracing::field::Empty
+        )
+    )]
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
@@ -119,15 +133,27 @@ impl ServerHandler for AggregatedServer {
             None => serde_json::Value::Object(serde_json::Map::new()),
         };
 
+        tracing::Span::current().record("tool.name", tool_name.as_str());
+
         info!("call_tool: {}", tool_name);
 
         let upstream_name = crate::mcp::tool_filter::parse_tool_name(&tool_name)
             .map(|(upstream, _)| upstream.to_string());
 
         if let Some(ref name) = upstream_name {
+            tracing::Span::current().record("upstream.name", name.as_str());
+        }
+
+        if let Some(ref name) = upstream_name {
             self.audit
                 .log_call(name.clone(), Some(tool_name.clone()), Some(arguments.clone()))
                 .await;
+            tracing::info!(
+                target: "mcp_tunnel.audit",
+                upstream = %name,
+                tool = %tool_name,
+                "tool call started"
+            );
         }
 
         let start = std::time::Instant::now();
@@ -141,6 +167,23 @@ impl ServerHandler for AggregatedServer {
                     self.audit
                         .log_response(name.clone(), Some(tool_name.clone()), result_json, duration_ms)
                         .await;
+
+                    tool_calls_total().add(1, &[
+                        KeyValue::new("upstream", name.clone()),
+                        KeyValue::new("tool", tool_name.clone()),
+                    ]);
+                    tool_call_duration().record(duration_ms, &[
+                        KeyValue::new("upstream", name.clone()),
+                        KeyValue::new("tool", tool_name.clone()),
+                    ]);
+
+                    tracing::info!(
+                        target: "mcp_tunnel.audit",
+                        upstream = %name,
+                        tool = %tool_name,
+                        duration_ms = duration_ms,
+                        "tool call completed"
+                    );
                 }
 
                 info!("call_tool: {} completed in {}ms", tool_name, duration_ms);
@@ -156,6 +199,21 @@ impl ServerHandler for AggregatedServer {
                     self.audit
                         .log_error(name.clone(), Some(tool_name.clone()), error_msg.clone(), duration_ms)
                         .await;
+
+                    tool_call_errors_total().add(1, &[
+                        KeyValue::new("upstream", name.clone()),
+                        KeyValue::new("tool", tool_name.clone()),
+                        KeyValue::new("error", error_msg.clone()),
+                    ]);
+
+                    tracing::info!(
+                        target: "mcp_tunnel.audit",
+                        upstream = %name,
+                        tool = %tool_name,
+                        duration_ms = duration_ms,
+                        error = %error_msg,
+                        "tool call completed"
+                    );
                 }
 
                 tracing::error!(error = %e, upstream = %upstream_name.as_deref().unwrap_or("unknown"), "tool call failed");

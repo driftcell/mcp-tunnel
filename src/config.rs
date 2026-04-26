@@ -19,6 +19,8 @@ pub struct Config {
     pub servers: Vec<ServerConfig>,
     #[serde(default)]
     pub tunnel: TunnelConfig,
+    #[serde(default)]
+    pub otel: OtelConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +84,42 @@ pub struct ToolInfo {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_service_name() -> String {
+    "mcp-tunnel".to_string()
+}
+
+fn default_otel_protocol() -> String {
+    "grpc".to_string()
+}
+
+fn default_sample_rate() -> f64 {
+    1.0
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OtelConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    #[serde(default = "default_service_name")]
+    pub service_name: String,
+    #[serde(default = "default_otel_protocol")]
+    pub protocol: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers: Option<Vec<OtelHeader>>,
+    #[serde(default = "default_sample_rate")]
+    pub sample_rate: f64,
+    #[serde(default = "default_true")]
+    pub traces_enabled: bool,
+    #[serde(default = "default_true")]
+    pub metrics_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OtelHeader {
+    pub key: String,
+    pub value: String,
 }
 
 impl Default for TunnelConfig {

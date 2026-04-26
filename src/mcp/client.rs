@@ -11,9 +11,11 @@ use rmcp::ServiceExt;
 use tokio::process::Command;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
+use opentelemetry::KeyValue;
 
 use crate::config::ServerConfig;
 use crate::error::{AppError, Result};
+use crate::otel::metrics::{upstream_connections_total, upstream_connection_errors_total};
 
 use super::tool_filter::prefix_tool_name;
 
@@ -54,12 +56,17 @@ impl AggregatedClient {
         }
         let mut clients = self.clients.write().await;
         for config in configs {
+            upstream_connections_total().add(1, &[KeyValue::new("upstream", config.name.clone())]);
             match Self::connect_single(config.clone()).await {
                 Ok(client) => {
                     info!("Connected to upstream: {}", config.name);
                     clients.insert(config.name.clone(), client);
                 }
                 Err(e) => {
+                    upstream_connection_errors_total().add(1, &[
+                        KeyValue::new("upstream", config.name.clone()),
+                        KeyValue::new("error", e.to_string()),
+                    ]);
                     warn!("Failed to connect to upstream '{}': {}", config.name, e);
                     // Continue connecting to other upstreams, don't abort
                 }
@@ -69,7 +76,14 @@ impl AggregatedClient {
     }
 
     /// Connect to a single upstream
-    #[tracing::instrument(skip(config))]
+    #[tracing::instrument(
+        skip(config),
+        fields(
+            otel.kind = "client",
+            upstream.name = %config.name,
+            upstream.type = ?config.ty
+        )
+    )]
     async fn connect_single(config: ServerConfig) -> Result<UpstreamClient> {
         match &config.ty {
             crate::config::UpstreamType::Stdio { command, args } => {
@@ -199,7 +213,14 @@ impl AggregatedClient {
     }
 
     /// Call a tool (using the prefixed name)
-    #[tracing::instrument(skip(self, arguments))]
+    #[tracing::instrument(
+        skip(self, arguments),
+        fields(
+            otel.kind = "client",
+            tool.name = %prefixed_name,
+            upstream.name = tracing::field::Empty
+        )
+    )]
     pub async fn call_tool(
         &self,
         prefixed_name: &str,
@@ -213,6 +234,8 @@ impl AggregatedClient {
         let client = clients
             .get(upstream_name)
             .ok_or_else(|| AppError::UpstreamNotFound(upstream_name.to_string()))?;
+
+        tracing::Span::current().record("upstream.name", upstream_name);
 
         let mut param = CallToolRequestParams::new(tool_name.to_string());
         if let serde_json::Value::Object(map) = arguments {
@@ -275,7 +298,13 @@ fn apply_filter(config: &ServerConfig, tools: Vec<Tool>) -> Vec<Tool> {
 }
 
 /// Connect to a single server and discover its tool list (used for tool fetching after OAuth in TUI)
-#[tracing::instrument(skip(config))]
+#[tracing::instrument(
+    skip(config),
+    fields(
+        otel.kind = "client",
+        upstream.name = %config.name
+    )
+)]
 pub async fn discover_tools(config: &ServerConfig) -> Result<Vec<Tool>> {
     match &config.ty {
         crate::config::UpstreamType::Stdio { command, args } => {

@@ -25,7 +25,10 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-#[tracing::instrument(skip(config))]
+#[tracing::instrument(
+    skip(config),
+    fields(otel.kind = "server")
+)]
 pub async fn run_tui(config: Config, config_path: PathBuf) -> Result<()> {
     info!("Starting TUI");
     crossterm::terminal::enable_raw_mode()?;
@@ -589,7 +592,7 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                 }
 
                 if app.quick_tunnel.is_none() {
-                    info!("Starting QuickTunnel");
+                    info!("Starting QuickTunnel via TUI");
                     let mut qt = crate::tunnel::quick::QuickTunnel::new();
                     match qt.start(&local_url).await {
                         Ok(url) => {
@@ -606,7 +609,7 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                     app.quick_tunnel = Some(qt);
                 } else if let Some(qt) = app.quick_tunnel.as_mut() {
                     if qt.is_running() {
-                        info!("Stopping QuickTunnel");
+                        info!("Stopping QuickTunnel via TUI");
                         if let Err(e) = qt.stop().await {
                             warn!("Failed to stop QuickTunnel: {}", e);
                             app.set_message(format!("Failed to stop QuickTunnel: {}", e));
@@ -707,13 +710,13 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
 
 /// Check whether a valid (non-expired) OAuth token already exists for a server.
 /// This performs NO network I/O.
-#[tracing::instrument]
+#[tracing::instrument(fields(otel.kind = "client", upstream.name = %name))]
 async fn has_valid_token(name: &str) -> Result<bool> {
     let store = crate::mcp::oauth::FileCredentialStore::new(name)?;
     Ok(store.load().await?.is_some())
 }
 
-#[tracing::instrument]
+#[tracing::instrument(fields(otel.kind = "client", upstream.name = %name))]
 async fn run_oauth_login(name: &str, url: &str) -> Result<()> {
     // Check if a valid (non-expired) token already exists BEFORE any network I/O.
     let store = crate::mcp::oauth::FileCredentialStore::new(name)?;
@@ -733,7 +736,10 @@ async fn run_oauth_login(name: &str, url: &str) -> Result<()> {
     Ok(())
 }
 
-#[tracing::instrument(skip(app))]
+#[tracing::instrument(
+    skip(app),
+    fields(otel.kind = "server")
+)]
 async fn start_serve(app: &mut App) -> Result<()> {
     let config = app.config.clone();
     let token = config.tunnel.token.as_deref();
@@ -834,7 +840,10 @@ async fn start_serve(app: &mut App) -> Result<()> {
     Ok(())
 }
 
-#[tracing::instrument(skip(app))]
+#[tracing::instrument(
+    skip(app),
+    fields(otel.kind = "server")
+)]
 async fn stop_serve(app: &mut App) {
     if !app.serve_running {
         debug!("stop_serve called but serve is not running");

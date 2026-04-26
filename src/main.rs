@@ -4,6 +4,7 @@ mod config;
 mod constants;
 mod error;
 mod mcp;
+mod otel;
 mod server;
 mod tui;
 mod tunnel;
@@ -13,12 +14,10 @@ use cli::{Cli, Commands};
 use config::Config;
 use std::path::{Path, PathBuf};
 use tracing::info;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let log_path = init_file_logger()?;
-    eprintln!("Logs written to: {}", log_path.display());
-
     let cli = Cli::parse();
     let config_path = &cli.config;
 
@@ -26,18 +25,24 @@ async fn main() -> anyhow::Result<()> {
         None => {
             let mut config = Config::load(config_path)?;
             ensure_token(&mut config, config_path)?;
+            let (log_path, _otel_guard) = init_subscriber(&config)?;
+            eprintln!("Logs written to: {}", log_path.display());
             tui::run_tui(config, config_path.clone()).await?;
             Ok(())
         }
         Some(Commands::Serve) => {
-            info!("Starting MCP Tunnel server");
             let mut config = Config::load(config_path)?;
             ensure_token(&mut config, config_path)?;
+            let (log_path, _otel_guard) = init_subscriber(&config)?;
+            eprintln!("Logs written to: {}", log_path.display());
+            info!("Starting MCP Tunnel server");
             let token = config.tunnel.token.as_deref();
             server::router::start_server(&config, &config.tunnel.bind_addr, token).await?;
             Ok(())
         }
         Some(Commands::Add { name, url }) => {
+            let log_path = init_file_logger()?;
+            eprintln!("Logs written to: {}", log_path.display());
             info!("Adding HTTP upstream: {} -> {}", name, url);
             let mut config = Config::load(config_path)?;
             let server = config::ServerConfig {
@@ -58,6 +63,8 @@ async fn main() -> anyhow::Result<()> {
             command,
             args,
         }) => {
+            let log_path = init_file_logger()?;
+            eprintln!("Logs written to: {}", log_path.display());
             info!("Adding stdio upstream: {} -> {} {:?}", name, command, args);
             let mut config = Config::load(config_path)?;
             let server = config::ServerConfig {
@@ -74,6 +81,8 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Some(Commands::Remove { name }) => {
+            let log_path = init_file_logger()?;
+            eprintln!("Logs written to: {}", log_path.display());
             info!("Removing upstream: {}", name);
             let mut config = Config::load(config_path)?;
             config.servers.retain(|s| s.name != name);
@@ -82,6 +91,8 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Some(Commands::ClearToken { name }) => {
+            let log_path = init_file_logger()?;
+            eprintln!("Logs written to: {}", log_path.display());
             info!("Clearing OAuth token for server: {}", name);
             let store = mcp::oauth::FileCredentialStore::new(&name)
                 .map_err(|e| anyhow::anyhow!("Failed to create credential store: {}", e))?;
@@ -145,4 +156,89 @@ fn init_file_logger() -> anyhow::Result<PathBuf> {
         .init();
 
     Ok(log_path)
+}
+
+fn init_subscriber(
+    config: &Config,
+) -> anyhow::Result<(PathBuf, Option<crate::otel::init::OtelGuard>)> {
+    let log_dir = data_dir()?;
+    std::fs::create_dir_all(&log_dir)?;
+
+    let log_path = log_dir.join("mcp-tunnel.log");
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+
+    let log_path_arc = std::sync::Arc::new(log_path.clone());
+    let shared_log = std::sync::Arc::new(std::sync::Mutex::new(log_file));
+
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let otel_guard = crate::otel::init::init_otel(&config.otel)?;
+
+    match otel_guard {
+        Some(ref guard) => {
+            if let Some(tracer) = guard.tracer() {
+                tracing_subscriber::registry()
+                    .with(tracing_opentelemetry::layer().with_tracer(tracer))
+                    .with(env_filter)
+                    .with({
+                        let path = std::sync::Arc::clone(&log_path_arc);
+                        let shared = std::sync::Arc::clone(&shared_log);
+                        tracing_subscriber::fmt::layer().with_writer(move || {
+                            let guard = shared.lock().unwrap();
+                            guard.try_clone().unwrap_or_else(|_| {
+                                std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(&*path)
+                                    .unwrap()
+                            })
+                        })
+                    })
+                    .init();
+            } else {
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with({
+                        let path = std::sync::Arc::clone(&log_path_arc);
+                        let shared = std::sync::Arc::clone(&shared_log);
+                        tracing_subscriber::fmt::layer().with_writer(move || {
+                            let guard = shared.lock().unwrap();
+                            guard.try_clone().unwrap_or_else(|_| {
+                                std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(&*path)
+                                    .unwrap()
+                            })
+                        })
+                    })
+                    .init();
+            }
+        }
+        None => {
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with({
+                    let path = std::sync::Arc::clone(&log_path_arc);
+                    let shared = std::sync::Arc::clone(&shared_log);
+                    tracing_subscriber::fmt::layer().with_writer(move || {
+                        let guard = shared.lock().unwrap();
+                        guard.try_clone().unwrap_or_else(|_| {
+                            std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&*path)
+                                .unwrap()
+                        })
+                    })
+                })
+                .init();
+        }
+    }
+
+    Ok((log_path, otel_guard))
 }

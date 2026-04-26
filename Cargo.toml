@@ -42,6 +42,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2"
 anyhow = "1"
 
+opentelemetry = "0.28"
+opentelemetry_sdk = { version = "0.28", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.28", features = ["trace", "metrics", "grpc-tonic", "http-proto"] }
+tracing-opentelemetry = "0.29"
+tonic = "0.12"
+
 dirs = "6"
 which = "8"
 tempfile = "3"
