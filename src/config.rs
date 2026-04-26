@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 use tracing::{info, debug};
+use crate::constants::DEFAULT_BIND_ADDR;
 use crate::error::Result;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -34,10 +35,16 @@ pub enum UpstreamType {
 pub struct TunnelConfig {
     #[serde(default = "default_tunnel_mode")]
     pub mode: TunnelMode,
+    #[serde(default = "default_bind_addr")]
+    pub bind_addr: String,
 }
 
 fn default_tunnel_mode() -> TunnelMode {
     TunnelMode::Disabled
+}
+
+fn default_bind_addr() -> String {
+    DEFAULT_BIND_ADDR.to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,7 +76,14 @@ impl Default for TunnelConfig {
     fn default() -> Self {
         TunnelConfig {
             mode: default_tunnel_mode(),
+            bind_addr: default_bind_addr(),
         }
+    }
+}
+
+impl TunnelConfig {
+    pub fn base_url(&self) -> String {
+        format!("http://{}", self.bind_addr)
     }
 }
 

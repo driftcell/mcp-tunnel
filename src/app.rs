@@ -62,6 +62,10 @@ pub struct App {
 
     // Edit mode flag (reuses add dialog UI)
     pub is_edit_mode: bool,
+
+    // Bind address edit dialog
+    pub show_bind_edit: bool,
+    pub bind_edit_value: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -72,6 +76,7 @@ pub enum AddDialogType {
 
 impl App {
     pub fn new(config: Config, config_path: PathBuf) -> Self {
+        let bind_addr = config.tunnel.bind_addr.clone();
         let mut app = Self {
             config,
             config_path,
@@ -99,6 +104,8 @@ impl App {
             add_dialog_fields: vec![String::new(), String::new()],
             add_dialog_focus: 0,
             is_edit_mode: false,
+            show_bind_edit: false,
+            bind_edit_value: bind_addr,
         };
         if !app.config.servers.is_empty() {
             app.server_list_state.select(Some(0));

@@ -97,9 +97,9 @@ fn render_status_card(frame: &mut Frame, app: &App, area: Rect, is_active: bool)
 
     // Quick hints
     let hints = if app.is_tunnel_running() {
-        "  'c' = copy URL  |  'o' = open in browser  |  't' = stop"
+        "  'c' = copy URL  |  'o' = open browser  |  't' = stop  |  'e' = edit bind"
     } else {
-        "  't' = start tunnel"
+        "  't' = start tunnel  |  'e' = edit bind address"
     };
     lines.push(Line::from(Span::styled(
         hints,
@@ -120,7 +120,7 @@ fn render_status_card(frame: &mut Frame, app: &App, area: Rect, is_active: bool)
     frame.render_widget(paragraph, area);
 }
 
-fn render_info_panel(frame: &mut Frame, _app: &App, area: Rect, is_active: bool) {
+fn render_info_panel(frame: &mut Frame, app: &App, area: Rect, is_active: bool) {
     let mut lines: Vec<Line> = Vec::new();
 
     // Local endpoint info
@@ -134,10 +134,19 @@ fn render_info_panel(frame: &mut Frame, _app: &App, area: Rect, is_active: bool)
     ]));
     lines.push(Line::from(""));
 
+    let base_url = app.config.tunnel.base_url();
+
+    lines.push(Line::from(vec![
+        Span::styled("  Bind   ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            &app.config.tunnel.bind_addr,
+            Style::default().fg(Color::Gray),
+        ),
+    ]));
     lines.push(Line::from(vec![
         Span::styled("  MCP    ", Style::default().fg(Color::DarkGray)),
         Span::styled(
-            format!("http://127.0.0.1:3000{}", MCP_PATH),
+            format!("{}{}", base_url, MCP_PATH),
             Style::default().fg(Color::Gray),
         ),
     ]));

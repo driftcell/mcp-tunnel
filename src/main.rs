@@ -31,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Serve) => {
             info!("Starting MCP Tunnel server");
             let config = Config::load(config_path)?;
-            server::router::start_server(&config).await?;
+            server::router::start_server(&config, &config.tunnel.bind_addr).await?;
             Ok(())
         }
         Some(Commands::Add { name, url }) => {

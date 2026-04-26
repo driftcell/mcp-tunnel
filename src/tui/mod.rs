@@ -5,7 +5,7 @@ pub mod audit_log;
 
 use crate::app::{App, Tab, AddDialogType};
 use crate::config::{Config, ServerConfig};
-use crate::constants::{DEFAULT_BASE_URL, DEFAULT_BIND_ADDR, MCP_PATH, TICK_RATE_MS};
+use crate::constants::{MCP_PATH, TICK_RATE_MS};
 use crate::error::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use rmcp::transport::streamable_http_server::{
@@ -316,9 +316,9 @@ fn render(frame: &mut ratatui::Frame, app: &mut App) {
         }
         Tab::Tunnel => {
             if app.is_tunnel_running() {
-                "q:quit | Tab:switch | t:stop | c:copy URL | o:open browser"
+                "q:quit | Tab:switch | t:stop | c:copy URL | o:open browser | e:edit bind"
             } else {
-                "q:quit | Tab:switch | t:start tunnel"
+                "q:quit | Tab:switch | t:start tunnel | e:edit bind"
             }
         }
         Tab::AuditLog => "q:quit | Tab:switch | ↑↓:scroll | c:clear",
@@ -334,10 +334,39 @@ fn render(frame: &mut ratatui::Frame, app: &mut App) {
             .style(Style::default().fg(Color::Green));
         frame.render_widget(msg_widget, msg_area);
     }
+
+    if app.show_bind_edit {
+        let area = layout::centered_rect(60, 20, frame.area());
+        let block = Block::default()
+            .title(" Edit Bind Address ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let content = vec![
+            Line::from("Format: host:port (e.g. 127.0.0.1:3000 or 0.0.0.0:3000)"),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("> ", Style::default().fg(Color::Cyan)),
+                Span::styled(&app.bind_edit_value, Style::default().fg(Color::White)),
+                Span::styled("◀", Style::default().fg(Color::DarkGray)),
+            ]),
+            Line::from(""),
+            Line::from("Enter = save  |  Esc = cancel"),
+        ];
+        let text = Paragraph::new(content).style(Style::default().fg(Color::Gray));
+        frame.render_widget(text, inner);
+    }
 }
 
 async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()> {
     debug!("key pressed: {:?}", key.code);
+
+    if app.show_bind_edit {
+        handle_bind_edit_key(app, key).await?;
+        return Ok(());
+    }
 
     if app.show_add_dialog {
         handle_add_dialog_key(app, key).await?;
@@ -525,7 +554,8 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                 } else {
                     match start_serve(app).await {
                         Ok(()) => {
-                            app.set_message(format!("Serve started on {}{}", DEFAULT_BASE_URL, MCP_PATH));
+                            let base = app.config.tunnel.base_url();
+                            app.set_message(format!("Serve started on {}{}", base, MCP_PATH));
                         }
                         Err(e) => {
                             warn!("Failed to start serve: {}", e);
@@ -536,7 +566,7 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
             }
         KeyCode::Char('t')
             if app.current_tab == Tab::Tunnel => {
-                let local_url = DEFAULT_BASE_URL.to_string();
+                let local_url = app.config.tunnel.base_url();
 
                 // Determine if we are starting (not stopping) the tunnel.
                 let is_starting = app.quick_tunnel.is_none()
@@ -547,7 +577,8 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                     info!("Auto-starting serve before tunnel");
                     match start_serve(app).await {
                         Ok(()) => {
-                            app.set_message(format!("Serve started on {}{}", DEFAULT_BASE_URL, MCP_PATH));
+                            let base = app.config.tunnel.base_url();
+                            app.set_message(format!("Serve started on {}{}", base, MCP_PATH));
                         }
                         Err(e) => {
                             warn!("Failed to auto-start serve: {}", e);
@@ -637,6 +668,11 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                 } else {
                     app.set_message("No tunnel URL to open".to_string());
                 }
+            }
+        KeyCode::Char('e')
+            if app.current_tab == Tab::Tunnel => {
+                app.show_bind_edit = true;
+                app.bind_edit_value = app.config.tunnel.bind_addr.clone();
             }
         KeyCode::Char('c')
             if app.current_tab == Tab::AuditLog => {
@@ -735,7 +771,7 @@ async fn start_serve(app: &mut App) -> Result<()> {
 
     let server = crate::server::router::AggregatedServer::new(client, audit);
 
-    let bind_addr: std::net::SocketAddr = DEFAULT_BIND_ADDR
+    let bind_addr: std::net::SocketAddr = app.config.tunnel.bind_addr
         .parse()
         .map_err(|e| crate::error::AppError::Mcp(format!("invalid bind address: {e}")))?;
 
@@ -784,6 +820,44 @@ async fn stop_serve(app: &mut App) {
     }
     app.serve_running = false;
     info!("Serve stopping...");
+}
+
+async fn handle_bind_edit_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()> {
+    use crossterm::event::KeyCode;
+
+    match key.code {
+        KeyCode::Esc => {
+            app.show_bind_edit = false;
+        }
+        KeyCode::Enter => {
+            let value = app.bind_edit_value.trim().to_string();
+            if value.is_empty() {
+                app.set_message("Bind address cannot be empty".to_string());
+                app.show_bind_edit = false;
+                return Ok(());
+            }
+            // Validate the address
+            match value.parse::<std::net::SocketAddr>() {
+                Ok(_) => {
+                    app.config.tunnel.bind_addr = value.clone();
+                    app.save_config()?;
+                    app.set_message(format!("Bind address set to: {}", value));
+                }
+                Err(e) => {
+                    app.set_message(format!("Invalid bind address: {}", e));
+                }
+            }
+            app.show_bind_edit = false;
+        }
+        KeyCode::Char(c) => {
+            app.bind_edit_value.push(c);
+        }
+        KeyCode::Backspace => {
+            app.bind_edit_value.pop();
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 async fn handle_add_dialog_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()> {

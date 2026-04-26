@@ -1,9 +1,6 @@
 /// Default bind address for the MCP server.
 pub const DEFAULT_BIND_ADDR: &str = "127.0.0.1:3000";
 
-/// Default base URL for the local MCP server (used by TUI / tunnel).
-pub const DEFAULT_BASE_URL: &str = "http://127.0.0.1:3000";
-
 /// Path segment where the MCP streamable HTTP endpoint is mounted.
 pub const MCP_PATH: &str = "/mcp";
 

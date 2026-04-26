@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::config::Config;
-use crate::constants::{DEFAULT_BIND_ADDR, MCP_PATH};
+use crate::constants::MCP_PATH;
 use crate::error::Result;
 use crate::mcp::client::AggregatedClient;
 use crate::server::audit::{AuditChannel, AuditLogger};
@@ -143,7 +143,7 @@ impl ServerHandler for AggregatedServer {
 /// 2. Create the audit log channel
 /// 3. Start the axum HTTP server, mounting StreamableHttpService at /mcp
 #[tracing::instrument(skip(config))]
-pub async fn start_server(config: &Config) -> Result<()> {
+pub async fn start_server(config: &Config, bind_addr: &str) -> Result<()> {
     let client = Arc::new(AggregatedClient::new());
     client.connect_all(&config.servers).await?;
 
@@ -180,7 +180,7 @@ pub async fn start_server(config: &Config) -> Result<()> {
 
     let server = AggregatedServer::new(client, audit);
 
-    let bind_addr: SocketAddr = DEFAULT_BIND_ADDR
+    let bind_addr: SocketAddr = bind_addr
         .parse()
         .map_err(|e| crate::error::AppError::Mcp(format!("invalid bind address: {}", e)))?;
     info!(
