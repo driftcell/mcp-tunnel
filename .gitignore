@@ -1,7 +1,7 @@
 /target
 
 # mt config
-.config.toml
+config.toml
 
 # Macos
 .DS_Store
