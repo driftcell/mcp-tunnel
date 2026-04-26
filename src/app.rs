@@ -31,7 +31,7 @@ pub struct App {
     pub show_tools: bool,
     pub tool_list_state: ListState,
     pub selected_tool: usize,
-    pub tools_for_server: Option<String>, // 当前展示工具的服务名
+    pub tools_for_server: Option<String>, // Server name currently displaying tools
     pub tools_folded: bool,               // 'f' toggles brief (folded) vs full view
 
     // Audit log
@@ -51,7 +51,7 @@ pub struct App {
     // Tool cache (in-memory only, not persisted)
     pub tool_cache: Vec<crate::config::ToolCache>,
 
-    // Messages (底部短暂提示)
+    // Messages (transient bottom notification)
     pub message: Option<String>,
     pub message_time: Option<Instant>,
 
@@ -147,7 +147,7 @@ impl App {
     }
 
     fn current_tools_count(&self) -> usize {
-        // 从 tool_cache 中查找当前服务的工具数量
+        // Look up the tool count for the current server from tool_cache
         self.tools_for_server.as_ref().and_then(|name| {
             self.tool_cache.iter().find(|c| c.server == *name)
                 .map(|c| c.tools.len())

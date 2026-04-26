@@ -2,7 +2,7 @@ use crate::error::{AppError, Result};
 use std::path::PathBuf;
 use tracing::info;
 
-/// cloudflared 二进制文件的存放目录
+/// Directory where the cloudflared binary is stored
 pub fn bin_dir() -> crate::error::Result<PathBuf> {
     let dir = dirs::data_local_dir()
         .ok_or_else(|| crate::error::AppError::Config("Could not determine data directory".to_string()))?
@@ -10,12 +10,12 @@ pub fn bin_dir() -> crate::error::Result<PathBuf> {
     Ok(dir)
 }
 
-/// cloudflared 二进制文件路径
+/// Path to the cloudflared binary
 pub fn bin_path() -> crate::error::Result<PathBuf> {
     Ok(bin_dir()?.join("cloudflared"))
 }
 
-/// 检查 cloudflared 是否存在，不存在则自动下载
+/// Check if cloudflared exists, download automatically if not
 pub async fn ensure_cloudflared() -> Result<PathBuf> {
     let path = bin_path()?;
     if path.exists() {
@@ -26,7 +26,7 @@ pub async fn ensure_cloudflared() -> Result<PathBuf> {
     Ok(path)
 }
 
-/// 根据平台下载对应的 cloudflared 二进制文件
+/// Download the appropriate cloudflared binary for the current platform
 async fn download_cloudflared() -> Result<()> {
     use std::fs;
 
@@ -41,7 +41,7 @@ async fn download_cloudflared() -> Result<()> {
     let bytes = resp.bytes().await.map_err(AppError::Http)?;
 
     if is_tgz {
-        // macOS ARM64 是 .tgz 格式，需要解压
+        // macOS ARM64 is .tgz format, needs extraction
         let tar_path = dir.join("cloudflared.tgz");
         let _bin = bin_path()?;
         fs::write(&tar_path, &bytes)?;
@@ -52,11 +52,11 @@ async fn download_cloudflared() -> Result<()> {
 
         fs::remove_file(tar_path)?;
     } else {
-        // Linux 等是直接的二进制文件
+        // Linux and others are direct binary files
         fs::write(bin_path()?, &bytes)?;
     }
 
-    // 设置可执行权限（Unix）
+    // Set executable permission (Unix)
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -70,7 +70,7 @@ async fn download_cloudflared() -> Result<()> {
     Ok(())
 }
 
-/// 根据当前平台返回下载 URL
+/// Return the download URL for the current platform
 fn get_download_url() -> Result<(&'static str, bool)> {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;

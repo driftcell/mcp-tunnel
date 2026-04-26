@@ -22,7 +22,7 @@ pub struct AuditLog {
     pub duration_ms: u64,
 }
 
-/// 审计通道：用于发送和接收审计日志
+/// Audit channel: for sending and receiving audit logs
 pub struct AuditChannel {
     pub sender: mpsc::Sender<AuditLog>,
     pub receiver: mpsc::Receiver<AuditLog>,
@@ -35,7 +35,7 @@ impl AuditChannel {
     }
 }
 
-/// 审计记录器：提供便捷的日志记录方法
+/// Audit logger: provides convenient log recording methods
 #[derive(Clone)]
 pub struct AuditLogger {
     sender: mpsc::Sender<AuditLog>,

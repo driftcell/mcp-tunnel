@@ -16,17 +16,17 @@ use crate::error::{AppError, Result};
 
 use super::tool_filter::prefix_tool_name;
 
-/// 聚合客户端：管理多个上游 MCP 连接，对外暴露统一的工具列表
+/// Aggregated client: manages multiple upstream MCP connections, exposing a unified tool list
 pub struct AggregatedClient {
-    /// 上游名 -> 已连接的客户端 Peer
+    /// Upstream name -> connected client Peer
     clients: RwLock<HashMap<String, UpstreamClient>>,
-    /// 上游服务器配置，用于运行时工具过滤
+    /// Upstream server configs, used for runtime tool filtering
     configs: RwLock<Vec<ServerConfig>>,
 }
 
-/// 单个上游的客户端包装
+/// Wrapper for a single upstream client
 struct UpstreamClient {
-    /// rmcp 客户端 Peer（用于发送请求）
+    /// rmcp client Peer (used to send requests)
     peer: Peer<RoleClient>,
     /// Keep the RunningService alive so the background transport task isn't cancelled.
     /// This field is not read directly — its only purpose is lifetime extension via Drop.
@@ -41,7 +41,7 @@ impl AggregatedClient {
         }
     }
 
-    /// 连接到所有配置的上游服务
+    /// Connect to all configured upstream services
     #[tracing::instrument(skip(self, configs))]
     pub async fn connect_all(&self, configs: &[ServerConfig]) -> Result<()> {
         {
@@ -57,14 +57,14 @@ impl AggregatedClient {
                 }
                 Err(e) => {
                     warn!("Failed to connect to upstream '{}': {}", config.name, e);
-                    // 继续连接其他上游，不中断
+                    // Continue connecting to other upstreams, don't abort
                 }
             }
         }
         Ok(())
     }
 
-    /// 连接单个上游
+    /// Connect to a single upstream
     #[tracing::instrument(skip(config))]
     async fn connect_single(config: ServerConfig) -> Result<UpstreamClient> {
         match &config.ty {
@@ -161,8 +161,8 @@ impl AggregatedClient {
         }
     }
 
-    /// 获取所有聚合后的工具列表（带前缀名称）
-    /// 每次调用时动态向上游查询，不缓存
+    /// Get the full aggregated tool list (with prefixed names)
+    /// Dynamically queries upstreams on each call, not cached
     pub async fn list_tools(&self) -> Vec<Tool> {
         let clients = self.clients.read().await;
         let configs = self.configs.read().await;
@@ -194,7 +194,7 @@ impl AggregatedClient {
         all_tools
     }
 
-    /// 调用工具（使用带前缀的名称）
+    /// Call a tool (using the prefixed name)
     #[tracing::instrument(skip(self, arguments))]
     pub async fn call_tool(
         &self,
@@ -222,13 +222,13 @@ impl AggregatedClient {
             .map_err(|e| AppError::Mcp(format!("tool call error: {}", e)))
     }
 
-    /// 获取所有上游名称
+    /// Get all upstream names
     pub async fn upstream_names(&self) -> Vec<String> {
         let clients = self.clients.read().await;
         clients.keys().cloned().collect()
     }
 
-    /// 检查是否至少有一个上游连接成功
+    /// Check if at least one upstream connection succeeded
     pub async fn has_any_client(&self) -> bool {
         let clients = self.clients.read().await;
         !clients.is_empty()
@@ -241,7 +241,7 @@ impl Default for AggregatedClient {
     }
 }
 
-/// 根据配置过滤工具列表
+/// Filter tool list according to config
 fn apply_filter(config: &ServerConfig, tools: Vec<Tool>) -> Vec<Tool> {
     tools
         .into_iter()
@@ -249,7 +249,7 @@ fn apply_filter(config: &ServerConfig, tools: Vec<Tool>) -> Vec<Tool> {
         .collect()
 }
 
-/// 连接到单个服务器并发现其工具列表（用于 TUI 中 OAuth 完成后的工具获取）
+/// Connect to a single server and discover its tool list (used for tool fetching after OAuth in TUI)
 #[tracing::instrument(skip(config))]
 pub async fn discover_tools(config: &ServerConfig) -> Result<Vec<Tool>> {
     match &config.ty {
@@ -289,7 +289,7 @@ pub async fn discover_tools(config: &ServerConfig) -> Result<Vec<Tool>> {
     }
 }
 
-/// 构建 reqwest Client，可选附带 Bearer token。
+/// Build a reqwest Client, optionally with a Bearer token.
 fn build_reqwest_client(bearer_token: Option<&str>) -> Result<reqwest::Client> {
     match bearer_token {
         None => Ok(reqwest::Client::default()),
@@ -306,8 +306,8 @@ fn build_reqwest_client(bearer_token: Option<&str>) -> Result<reqwest::Client> {
     }
 }
 
-/// 通过 Streamable HTTP transport 连接到 MCP 服务。
-/// 返回 (Peer, RunningService)；调用方必须持有 RunningService 以保持连接存活。
+/// Connect to an MCP service via Streamable HTTP transport.
+/// Returns (Peer, RunningService); the caller must hold RunningService to keep the connection alive.
 async fn connect_http(
     url: &str,
     reqwest_client: reqwest::Client,
@@ -323,7 +323,7 @@ async fn connect_http(
     Ok((peer, service))
 }
 
-/// 构建 stdio 命令
+/// Build a stdio command
 fn build_command(command: &str, args: &[String]) -> Command {
     let mut cmd = Command::new(command);
     cmd.args(args);

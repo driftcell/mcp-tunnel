@@ -16,7 +16,7 @@ pub fn render_servers(frame: &mut Frame, app: &mut App, area: Rect) {
     let is_active = app.current_tab == Tab::Servers;
     let (list_area, detail_area) = crate::tui::layout::detail_layout(area);
 
-    // 渲染服务列表
+    // Render server list
     let items: Vec<ListItem> = app
         .config
         .servers
@@ -48,7 +48,7 @@ pub fn render_servers(frame: &mut Frame, app: &mut App, area: Rect) {
 
     frame.render_stateful_widget(list, list_area, &mut app.server_list_state);
 
-    // 渲染详情面板（工具列表或服务器详情）
+    // Render detail panel (tool list or server details)
     if app.show_tools {
         render_tools_detail(frame, app, detail_area);
     } else {
@@ -374,7 +374,7 @@ fn render_add_dialog(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     let popup_area = crate::tui::layout::centered_rect(50, 40, area);
 
-    // 清除背景
+    // Clear background
     frame.render_widget(Clear, popup_area);
 
     let (title, hint) = if app.is_edit_mode {

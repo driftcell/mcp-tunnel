@@ -3,7 +3,7 @@ use std::process::Stdio;
 use tokio::process::{Child, Command};
 use tracing::{info, warn};
 
-/// Quick tunnel 管理器
+/// Quick tunnel manager
 pub struct QuickTunnel {
     child: Option<Child>,
 }
@@ -13,9 +13,9 @@ impl QuickTunnel {
         Self { child: None }
     }
 
-    /// 启动 quick tunnel
-    /// local_url: 本地服务地址，如 "http://localhost:3000"
-    /// 返回生成的公网 URL
+    /// Start a quick tunnel
+    /// local_url: local service URL, e.g. "http://localhost:3000"
+    /// Returns the generated public URL
     #[tracing::instrument(skip(self))]
     pub async fn start(&mut self, local_url: &str) -> Result<String> {
         let bin = super::binary::ensure_cloudflared().await?;
@@ -27,7 +27,7 @@ impl QuickTunnel {
             .spawn()
             .map_err(|e| AppError::Tunnel(format!("failed to start cloudflared: {}", e)))?;
 
-        // 读取 stderr 输出，提取 trycloudflare.com URL
+        // Read stderr output and extract trycloudflare.com URL
         let stderr = child
             .stderr
             .take()
@@ -43,7 +43,7 @@ impl QuickTunnel {
         let result = tokio::time::timeout(timeout, async {
             while let Ok(Some(line)) = lines.next_line().await {
                 info!("[cloudflared] {}", line);
-                // 提取 URL，格式如: https://xxx.trycloudflare.com
+                // Extract URL, format: https://xxx.trycloudflare.com
                 if line.contains("trycloudflare.com")
                     && let Some(u) = extract_url(&line)
                 {
@@ -78,7 +78,7 @@ impl QuickTunnel {
         Ok(url)
     }
 
-    /// 停止 tunnel
+    /// Stop the tunnel
     #[tracing::instrument(skip(self))]
     pub async fn stop(&mut self) -> Result<()> {
         if let Some(mut child) = self.child.take() {
@@ -101,7 +101,7 @@ impl QuickTunnel {
     }
 }
 
-/// 从 cloudflared 输出中提取 trycloudflare.com URL
+/// Extract trycloudflare.com URL from cloudflared output
 fn extract_url(line: &str) -> Option<String> {
     // Find the start of https://
     if let Some(start) = line.find("https://") {

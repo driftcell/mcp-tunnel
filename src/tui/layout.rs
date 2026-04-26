@@ -1,46 +1,46 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
-/// 主布局：顶部标题栏 + 中间内容区 + 底部状态栏
+/// Main layout: top title bar + middle content area + bottom status bar
 pub fn main_layout(area: Rect) -> (Rect, Rect, Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // 标题
-            Constraint::Min(3),    // 内容
-            Constraint::Length(1), // 状态栏
+            Constraint::Length(1), // Title
+            Constraint::Min(3),    // Content
+            Constraint::Length(1), // Status bar
         ])
         .split(area);
 
     (chunks[0], chunks[1], chunks[2])
 }
 
-/// 内容布局：侧边栏标签 + 主内容区
+/// Content layout: sidebar tabs + main content area
 pub fn content_layout(area: Rect) -> (Rect, Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(16), // 侧边栏
-            Constraint::Min(20),    // 主内容
+            Constraint::Length(16), // Sidebar
+            Constraint::Min(20),    // Main content
         ])
         .split(area);
 
     (chunks[0], chunks[1])
 }
 
-/// 主内容内部布局（用于 Servers tab）
+/// Inner main content layout (for Servers tab)
 pub fn detail_layout(area: Rect) -> (Rect, Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(30), // 列表
-            Constraint::Percentage(70), // 详情
+            Constraint::Percentage(30), // List
+            Constraint::Percentage(70), // Detail
         ])
         .split(area);
 
     (chunks[0], chunks[1])
 }
 
-/// 计算居中矩形区域（按百分比裁剪）
+/// Compute a centered rectangle (cropped by percentage)
 pub fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)

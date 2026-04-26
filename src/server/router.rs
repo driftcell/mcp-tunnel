@@ -19,10 +19,10 @@ use crate::error::Result;
 use crate::mcp::client::AggregatedClient;
 use crate::server::audit::{AuditChannel, AuditLogger};
 
-/// 聚合 MCP Server 的 handler。
+/// Aggregated MCP Server handler.
 ///
-/// 实现 rmcp 的 `ServerHandler` trait，处理客户端的 tools/list 和 tools/call 请求，
-/// 将请求路由到对应的上游 MCP 服务。
+/// Implements rmcp's `ServerHandler` trait to handle client tools/list and tools/call requests,
+/// routing them to the corresponding upstream MCP service.
 #[derive(Clone)]
 pub struct AggregatedServer {
     client: Arc<AggregatedClient>,
@@ -48,7 +48,7 @@ impl ServerHandler for AggregatedServer {
             )
     }
 
-    /// 处理 tools/list 请求：返回聚合后的工具列表。
+    /// Handle tools/list request: return the aggregated tool list.
     #[tracing::instrument(skip(self))]
     async fn list_tools(
         &self,
@@ -73,7 +73,7 @@ impl ServerHandler for AggregatedServer {
         Ok(ListToolsResult::with_all_items(tools))
     }
 
-    /// 处理 tools/call 请求：解析工具名前缀，路由到对应上游。
+    /// Handle tools/call request: parse the tool name prefix and route to the corresponding upstream.
     #[tracing::instrument(skip(self))]
     async fn call_tool(
         &self,
@@ -134,11 +134,11 @@ impl ServerHandler for AggregatedServer {
     }
 }
 
-/// 启动聚合 MCP Server (Streamable HTTP transport).
+/// Start the aggregated MCP Server (Streamable HTTP transport).
 ///
-/// 1. 初始化 AggregatedClient 并连接所有配置的上游
-/// 2. 创建审计日志通道
-/// 3. 启动 axum HTTP server，挂载 StreamableHttpService 到 /mcp
+/// 1. Initialize AggregatedClient and connect all configured upstreams
+/// 2. Create the audit log channel
+/// 3. Start the axum HTTP server, mounting StreamableHttpService at /mcp
 #[tracing::instrument(skip(config))]
 pub async fn start_server(config: &Config) -> Result<()> {
     let client = Arc::new(AggregatedClient::new());
