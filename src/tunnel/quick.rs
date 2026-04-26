@@ -22,7 +22,7 @@ impl QuickTunnel {
 
         let mut child = Command::new(bin)
             .args(["tunnel", "--url", local_url])
-            .stdout(Stdio::piped())
+            .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| AppError::Tunnel(format!("failed to start cloudflared: {}", e)))?;
@@ -44,7 +44,7 @@ impl QuickTunnel {
             while let Ok(Some(line)) = lines.next_line().await {
                 info!("[cloudflared] {}", line);
                 // Extract URL, format: https://xxx.trycloudflare.com
-                if line.contains("trycloudflare.com")
+                if line.to_lowercase().contains("trycloudflare.com")
                     && let Some(u) = extract_url(&line)
                 {
                     url = Some(u);
@@ -67,6 +67,18 @@ impl QuickTunnel {
             return Err(AppError::Tunnel(
                 "timeout waiting for tunnel URL".to_string(),
             ));
+        }
+
+        // Spawn a background task to drain remaining stderr so the pipe doesn't block
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(stderr);
+                let mut buf = String::new();
+                while let Ok(n) = reader.read_line(&mut buf).await {
+                    if n == 0 { break; }
+                    buf.clear();
+                }
+            });
         }
 
         let url = url.ok_or_else(|| {
@@ -113,9 +125,9 @@ fn extract_url(line: &str) -> Option<String> {
         let candidate = &rest[..end];
         // Trim trailing punctuation
         let url = candidate.trim_end_matches(|c: char| {
-            matches!(c, '.' | ',' | ')' | ']' | '"' | '\'' | '>')
+            matches!(c, '.' | ',' | ')' | ']' | '"' | '\'' | '>' | '<' | '{' | '}' | ';' | ':' | '|')
         });
-        if url.contains("trycloudflare.com") && url::Url::parse(url).is_ok() {
+        if url.to_lowercase().contains("trycloudflare.com") && url::Url::parse(url).is_ok() {
             return Some(url.to_string());
         }
     }

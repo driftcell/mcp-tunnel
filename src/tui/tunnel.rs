@@ -26,9 +26,10 @@ pub fn render_tunnel(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn render_status_card(frame: &mut Frame, app: &App, area: Rect, is_active: bool) {
-    let (status_label, status_color, status_icon) = match app.quick_tunnel.as_ref() {
-        Some(qt) if qt.is_running() => ("Running", Color::Green, "●"),
-        _ => ("Stopped", Color::DarkGray, "○"),
+    let (status_label, status_color, status_icon) = if app.is_tunnel_running() {
+        ("Running", Color::Green, "●")
+    } else {
+        ("Stopped", Color::DarkGray, "○")
     };
 
     let tunnel_mode_label = match app.config.tunnel.mode {
@@ -79,9 +80,9 @@ fn render_status_card(frame: &mut Frame, app: &App, area: Rect, is_active: bool)
         .map(|u| format!("{}{}", u, MCP_PATH))
         .unwrap_or_else(|| "Not available".to_string());
 
-    let url_color = if app.quick_tunnel_running && app.serve_running {
+    let url_color = if app.is_tunnel_running() && app.serve_running {
         Color::Green
-    } else if app.quick_tunnel_running {
+    } else if app.is_tunnel_running() {
         Color::Yellow
     } else {
         Color::DarkGray
@@ -95,7 +96,7 @@ fn render_status_card(frame: &mut Frame, app: &App, area: Rect, is_active: bool)
     lines.push(Line::from(""));
 
     // Quick hints
-    let hints = if app.quick_tunnel_running {
+    let hints = if app.is_tunnel_running() {
         "  'c' = copy URL  |  'o' = open in browser  |  't' = stop"
     } else {
         "  't' = start tunnel"

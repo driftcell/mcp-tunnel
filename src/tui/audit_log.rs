@@ -10,8 +10,9 @@ use crate::app::{App, Tab};
 
 fn truncate_json(value: &serde_json::Value, max_len: usize) -> String {
     let s = serde_json::to_string(value).unwrap_or_else(|_| "<?>".to_string());
-    if s.len() > max_len {
-        format!("{}...", &s[..max_len])
+    if s.chars().count() > max_len {
+        let truncated: String = s.chars().take(max_len.saturating_sub(3)).collect();
+        format!("{}...", truncated)
     } else {
         s
     }
@@ -35,7 +36,7 @@ pub fn render_audit_log(frame: &mut Frame, app: &mut App, area: Rect) {
                 let ts_str = format!("{:02}:{:02}:{:02}", ts.hour(), ts.minute(), ts.second());
                 let tool_str = log.tool.as_deref().unwrap_or("-");
                 let error_str = log.error.as_deref().unwrap_or("");
-                let mut parts = vec![format!("[{}] {} {} \u{2192} {}", ts_str, direction, log.upstream, tool_str)];
+                let mut parts = vec![format!("[{}] {} {} → {}", ts_str, direction, log.upstream, tool_str)];
                 if let Some(ref args) = log.args {
                     parts.push(format!("| args: {}", truncate_json(args, 30)));
                 }

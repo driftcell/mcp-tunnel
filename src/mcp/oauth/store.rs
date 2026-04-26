@@ -90,16 +90,20 @@ impl FileCredentialStore {
     }
 
     /// Save OAuth token response to file with issue time tracking and client_id.
+    /// Uses atomic write via temp file + rename to avoid data loss, and sets
+    /// restrictive permissions before writing.
     pub async fn save_with_client_id(
         &self,
         token: &OAuthTokenResponse,
         client_id: &str,
     ) -> crate::error::Result<()> {
+        // Create parent directories first
         if let Some(parent) = self.path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
                 .map_err(|e| crate::error::AppError::OAuth(format!("failed to create directory: {}", e)))?;
         }
+
         let stored = StoredToken {
             token: token.clone(),
             issue_time: Utc::now(),
@@ -107,17 +111,42 @@ impl FileCredentialStore {
         };
         let json = serde_json::to_string_pretty(&stored)
             .map_err(|e| crate::error::AppError::OAuth(e.to_string()))?;
-        tokio::fs::write(&self.path, json)
-            .await
-            .map_err(|e| crate::error::AppError::OAuth(e.to_string()))?;
 
-        // Set restrictive permissions on Unix (owner read/write only)
+        // Write to a temp file next to the target, set permissions, then rename atomically
+        let temp_path = self.path.with_extension("tmp");
+
+        #[cfg(unix)]
+        {
+            let mut file = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&temp_path)
+                .await
+                .map_err(|e| crate::error::AppError::OAuth(format!("failed to create temp file: {}", e)))?;
+            tokio::io::AsyncWriteExt::write_all(&mut file, json.as_bytes()).await
+                .map_err(|e| crate::error::AppError::OAuth(format!("failed to write temp file: {}", e)))?;
+        }
+
+        #[cfg(not(unix))]
+        {
+            tokio::fs::write(&temp_path, &json)
+                .await
+                .map_err(|e| crate::error::AppError::OAuth(format!("failed to write temp file: {}", e)))?;
+        }
+
+        // Atomic rename
+        tokio::fs::rename(&temp_path, &self.path)
+            .await
+            .map_err(|e| crate::error::AppError::OAuth(format!("failed to rename temp file: {}", e)))?;
+
+        // Fallback: set restrictive permissions on Unix (owner read/write only)
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(0o600);
-            std::fs::set_permissions(&self.path, perms)
-                .map_err(|e| crate::error::AppError::OAuth(format!("failed to set file permissions: {}", e)))?;
+            let _ = std::fs::set_permissions(&self.path, perms);
         }
 
         Ok(())

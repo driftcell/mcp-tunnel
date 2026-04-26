@@ -137,8 +137,20 @@ pub async fn run_pkce_flow(url: &str) -> Result<PkceFlowResult, AppError> {
     let expected_csrf = extract_state_from_url(&auth_url)
         .ok_or_else(|| AppError::OAuth("failed to extract state from authorization URL".to_string()))?;
 
-    // Start local callback server and wait for code and csrf token
-    let (code, csrf_token) = wait_for_callback(OAUTH_CALLBACK_ADDR, expected_csrf).await?;
+    // Start local callback server and wait for code and csrf token (with 5-minute timeout)
+    let (code, csrf_token) = match tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        wait_for_callback(OAUTH_CALLBACK_ADDR, expected_csrf),
+    )
+    .await
+    {
+        Ok(result) => result?,
+        Err(_) => {
+            return Err(AppError::OAuth(
+                "OAuth callback timed out after 5 minutes".to_string(),
+            ));
+        }
+    };
 
     state
         .handle_callback(&code, &csrf_token)
@@ -198,27 +210,50 @@ async fn wait_for_callback(addr: &str, expected_csrf: String) -> Result<(String,
 /// Handle a single HTTP callback request, extracting the authorization code and CSRF token.
 /// Validates the CSRF `state` parameter against the expected token.
 async fn handle_callback_request(mut stream: TcpStream, expected_csrf: &str) -> Result<(String, String), AppError> {
+    // Set a connection timeout for reading the request
+    let read_timeout = std::time::Duration::from_secs(30);
+
     let mut reader = BufReader::new(&mut stream);
     let mut request_line = String::new();
-    reader
-        .read_line(&mut request_line)
+
+    let read_result = tokio::time::timeout(read_timeout, reader.read_line(&mut request_line))
         .await
+        .map_err(|_| AppError::OAuth("callback request read timed out".to_string()))?;
+
+    read_result
         .map_err(|e| AppError::OAuth(format!("failed to read request: {}", e)))?;
+
+    // Limit request line size to prevent memory exhaustion
+    if request_line.len() > 4096 {
+        return Err(AppError::OAuth("request line too long".to_string()));
+    }
 
     let parts: Vec<&str> = request_line.split_whitespace().collect();
     if parts.len() < 2 {
         return Err(AppError::OAuth("invalid HTTP request".to_string()));
     }
 
+    // Validate HTTP method is GET
+    if parts[0] != "GET" {
+        return Err(AppError::OAuth(format!(
+            "unsupported HTTP method: {}",
+            parts[0]
+        )));
+    }
+
     let path = parts[1];
 
-    // Read and discard remaining headers
+    // Read and discard remaining headers (with timeout)
     let mut line = String::new();
-    while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
-        if line == "\r\n" || line == "\n" {
-            break;
-        }
+    loop {
         line.clear();
+        match tokio::time::timeout(read_timeout, reader.read_line(&mut line)).await {
+            Ok(Ok(0)) | Ok(Ok(_)) if line == "\r\n" || line == "\n" => break,
+            Ok(Ok(n)) if n > 0 => continue,
+            Ok(Ok(_)) => break,
+            Ok(Err(_)) => break,
+            Err(_) => return Err(AppError::OAuth("header read timed out".to_string())),
+        }
     }
 
     // Parse query parameters

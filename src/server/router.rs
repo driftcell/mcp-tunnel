@@ -55,7 +55,9 @@ impl ServerHandler for AggregatedServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListToolsResult, McpError> {
-        let tools = self.client.list_tools().await;
+        let tools = self.client.list_tools().await.map_err(|e| {
+            McpError::internal_error(format!("failed to list tools: {}", e), None)
+        })?;
         let upstream_names = self.client.upstream_names().await;
 
         info!(
@@ -125,8 +127,9 @@ impl ServerHandler for AggregatedServer {
                         .await;
                 }
 
+                tracing::error!(error = %e, upstream = %upstream_name.as_deref().unwrap_or("unknown"), "tool call failed");
                 Err(McpError::internal_error(
-                    format!("tool call failed: {}", error_msg),
+                    format!("tool call failed on upstream '{}': {}", upstream_name.as_deref().unwrap_or("unknown"), error_msg),
                     None,
                 ))
             }
@@ -163,7 +166,7 @@ pub async fn start_server(config: &Config) -> Result<()> {
         }
     });
 
-    let tools = client.list_tools().await;
+    let tools = client.list_tools().await.unwrap_or_default();
     let upstreams = client.upstream_names().await;
     info!(
         "Aggregated {} tool(s) from {} upstream(s): {:?}",

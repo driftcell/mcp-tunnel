@@ -40,7 +40,6 @@ pub struct App {
 
     // Tunnel
     pub tunnel_url: Option<String>,
-    pub quick_tunnel_running: bool,
     pub quick_tunnel: Option<QuickTunnel>,
 
     // Serve mode
@@ -88,7 +87,6 @@ impl App {
             audit_logs: Vec::new(),
             audit_scroll: 0,
             tunnel_url: None,
-            quick_tunnel_running: false,
             quick_tunnel: None,
             serve_running: false,
             serve_cancel: None,
@@ -108,8 +106,13 @@ impl App {
         app
     }
 
+    #[must_use]
     pub fn save_config(&mut self) -> Result<()> {
         self.config.save(&self.config_path)
+    }
+
+    pub fn is_tunnel_running(&self) -> bool {
+        self.quick_tunnel.as_ref().map_or(false, |qt| qt.is_running())
     }
 
     pub fn next_server(&mut self) {

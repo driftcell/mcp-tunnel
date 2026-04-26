@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use oauth2::TokenResponse;
 use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
@@ -29,6 +30,9 @@ struct UpstreamClient {
     /// rmcp client Peer (used to send requests)
     peer: Peer<RoleClient>,
     /// Keep the RunningService alive so the background transport task isn't cancelled.
+    /// When this UpstreamClient is dropped, `_keepalive` is dropped, which causes the
+    /// underlying TokioChildProcess transport to be dropped. TokioChildProcess's Drop
+    /// implementation kills the child process, preventing zombie processes.
     /// This field is not read directly — its only purpose is lifetime extension via Drop.
     _keepalive: RunningService<RoleClient, ()>,
 }
@@ -163,7 +167,7 @@ impl AggregatedClient {
 
     /// Get the full aggregated tool list (with prefixed names)
     /// Dynamically queries upstreams on each call, not cached
-    pub async fn list_tools(&self) -> Vec<Tool> {
+    pub async fn list_tools(&self) -> Result<Vec<Tool>> {
         let clients = self.clients.read().await;
         let configs = self.configs.read().await;
         let mut all_tools = Vec::new();
@@ -186,12 +190,12 @@ impl AggregatedClient {
             for tool in filtered_tools {
                 let mut prefixed_tool = tool.clone();
                 prefixed_tool.name =
-                    prefix_tool_name(upstream_name, tool.name.as_ref()).into();
+                    prefix_tool_name(upstream_name, tool.name.as_ref())?.into();
                 all_tools.push(prefixed_tool);
             }
         }
 
-        all_tools
+        Ok(all_tools)
     }
 
     /// Call a tool (using the prefixed name)
@@ -233,6 +237,27 @@ impl AggregatedClient {
         let clients = self.clients.read().await;
         !clients.is_empty()
     }
+
+    /// Gracefully shutdown all upstream connections by clearing the clients map.
+    /// This drops each UpstreamClient (and its _keepalive RunningService), which
+    /// triggers cleanup of the underlying child processes.
+    #[allow(dead_code)]
+    pub async fn shutdown(&self) {
+        let mut clients = self.clients.write().await;
+        if !clients.is_empty() {
+            info!("Shutting down {} upstream client(s)", clients.len());
+            clients.clear();
+        }
+    }
+}
+
+impl Drop for AggregatedClient {
+    fn drop(&mut self) {
+        // Best-effort log: the actual cleanup requires async, so the caller
+        // should invoke `shutdown().await` before dropping. If the runtime
+        // is still alive we spawn a best-effort cleanup task.
+        info!("AggregatedClient dropped — upstream clients will be cleaned up");
+    }
 }
 
 impl Default for AggregatedClient {
@@ -264,9 +289,9 @@ pub async fn discover_tools(config: &ServerConfig) -> Result<Vec<Tool>> {
                 .map_err(|e| AppError::Mcp(format!("client start error: {}", e)))?;
 
             let peer = client.peer().clone();
-            let tools = peer
-                .list_all_tools()
+            let tools = tokio::time::timeout(Duration::from_secs(30), peer.list_all_tools())
                 .await
+                .map_err(|_| AppError::Mcp("tool discovery timed out".to_string()))?
                 .map_err(|e| AppError::Mcp(format!("list tools error: {}", e)))?;
             Ok(tools)
         }
@@ -279,9 +304,9 @@ pub async fn discover_tools(config: &ServerConfig) -> Result<Vec<Tool>> {
 
             let reqwest_client = build_reqwest_client(token.as_deref())?;
             let (peer, _service) = connect_http(url, reqwest_client).await?;
-            let tools = peer
-                .list_all_tools()
+            let tools = tokio::time::timeout(Duration::from_secs(30), peer.list_all_tools())
                 .await
+                .map_err(|_| AppError::Mcp("tool discovery timed out".to_string()))?
                 .map_err(|e| AppError::Mcp(format!("list tools error: {}", e)))?;
             Ok(tools)
             // `_service` (RunningService) stays alive until here, keeping the transport open

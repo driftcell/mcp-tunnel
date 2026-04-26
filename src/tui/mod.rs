@@ -45,7 +45,7 @@ pub async fn run_tui(config: Config, config_path: PathBuf) -> Result<()> {
 
     if app.serve_running {
         info!("TUI quitting, stopping serve...");
-        stop_serve(&mut app).await;
+        tokio::time::timeout(std::time::Duration::from_secs(2), stop_serve(&mut app)).await.ok();
     }
 
     crossterm::terminal::disable_raw_mode()?;
@@ -96,8 +96,8 @@ async fn run_app<B: Backend>(
                         _ => return,
                     };
 
-                    // Check if token exists before any network I/O.
-                    let has_token = match check_oauth_token_exists(&name).await {
+                    // Check if a valid token exists before any network I/O.
+                    let has_token = match has_valid_token(&name).await {
                         Ok(v) => v,
                         Err(e) => {
                             let _ = tx
@@ -113,7 +113,7 @@ async fn run_app<B: Backend>(
                     if !has_token {
                         let _ = tx
                             .send(BackgroundInitMsg::Status(format!(
-                                "'{}' needs OAuth (press 'o')",
+                                "'{}' has no valid token (press 'o')",
                                 name
                             )))
                             .await;
@@ -315,7 +315,7 @@ fn render(frame: &mut ratatui::Frame, app: &mut App) {
             }
         }
         Tab::Tunnel => {
-            if app.quick_tunnel_running {
+            if app.is_tunnel_running() {
                 "q:quit | Tab:switch | t:stop | c:copy URL | o:open browser"
             } else {
                 "q:quit | Tab:switch | t:start tunnel"
@@ -564,7 +564,6 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                         Ok(url) => {
                             info!("QuickTunnel started: {}", url);
                             app.tunnel_url = Some(url.clone());
-                            app.quick_tunnel_running = true;
                             app.set_message(format!("QuickTunnel started: {}", url));
                         }
                         Err(e) => {
@@ -583,7 +582,6 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                             return Ok(());
                         }
                         info!("QuickTunnel stopped");
-                        app.quick_tunnel_running = false;
                         app.tunnel_url = None;
                         app.set_message("QuickTunnel stopped.".to_string());
                     } else {
@@ -592,7 +590,6 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
                             Ok(url) => {
                                 info!("QuickTunnel restarted: {}", url);
                                 app.tunnel_url = Some(url.clone());
-                                app.quick_tunnel_running = true;
                                 app.set_message(format!("QuickTunnel started: {}", url));
                             }
                             Err(e) => {
@@ -654,7 +651,7 @@ async fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()
 /// Check whether a valid (non-expired) OAuth token already exists for a server.
 /// This performs NO network I/O.
 #[tracing::instrument]
-async fn check_oauth_token_exists(name: &str) -> Result<bool> {
+async fn has_valid_token(name: &str) -> Result<bool> {
     let store = crate::mcp::oauth::FileCredentialStore::new(name)?;
     Ok(store.load().await?.is_some())
 }
@@ -692,7 +689,7 @@ async fn start_serve(app: &mut App) -> Result<()> {
         ));
     }
 
-    let tools = client.list_tools().await;
+    let tools = client.list_tools().await.unwrap_or_default();
     let upstreams = client.upstream_names().await;
     info!(
         "Aggregated {} tool(s) from {} upstream(s): {:?}",
@@ -713,7 +710,13 @@ async fn start_serve(app: &mut App) -> Result<()> {
         loop {
             tokio::select! {
                 Some(log) = audit_channel.receiver.recv() => {
-                    let mut buf = audit_buffer.lock().unwrap();
+                    let mut buf = match audit_buffer.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => {
+                            warn!("Audit buffer mutex was poisoned, recovering data");
+                            poisoned.into_inner()
+                        }
+                    };
                     buf.push(log);
                     // Cap the background buffer to prevent unbounded growth
                     const MAX_BUFFERED_AUDIT_LOGS: usize = 5000;
@@ -770,8 +773,14 @@ async fn start_serve(app: &mut App) -> Result<()> {
 
 #[tracing::instrument(skip(app))]
 async fn stop_serve(app: &mut App) {
+    if !app.serve_running {
+        debug!("stop_serve called but serve is not running");
+        return;
+    }
     if let Some(ct) = app.serve_cancel.take() {
         ct.cancel();
+    } else {
+        warn!("stop_serve called but no cancel token exists");
     }
     app.serve_running = false;
     info!("Serve stopping...");
@@ -805,11 +814,12 @@ async fn handle_add_dialog_key(app: &mut App, key: crossterm::event::KeyEvent) -
             let value = app.add_dialog_fields[1].trim().to_string();
             if !name.is_empty() && !value.is_empty() {
                 if app.is_edit_mode {
-                    let original_name = app.config.servers.get(app.selected_server)
-                        .map(|s| s.name.clone());
+                    // Capture the original config first so we can preserve its tool filters.
+                    let original = app.config.servers.get(app.selected_server).cloned();
+                    let original_name = original.as_ref().map(|s| s.name.clone());
 
                     let dialog_type = app.add_dialog_type;
-                    let server = match dialog_type {
+                    let mut server = match dialog_type {
                         AddDialogType::Http => {
                             info!("Editing HTTP server: {} -> {}", name, value);
                             ServerConfig {
@@ -832,6 +842,13 @@ async fn handle_add_dialog_key(app: &mut App, key: crossterm::event::KeyEvent) -
                             }
                         }
                     };
+
+                    // Preserve original tool filters before validation.
+                    if let Some(ref orig) = original {
+                        server.enabled_tools = orig.enabled_tools.clone();
+                        server.disabled_tools = orig.disabled_tools.clone();
+                    }
+
                     if let Err(e) = server.validate() {
                         app.set_message(format!("Invalid server: {}", e));
                         app.show_add_dialog = false;
@@ -839,13 +856,7 @@ async fn handle_add_dialog_key(app: &mut App, key: crossterm::event::KeyEvent) -
                         return Ok(());
                     }
 
-                    // Preserve enabled_tools and disabled_tools from original server
-                    if let Some(original) = app.config.servers.get(app.selected_server) {
-                        let mut updated = server;
-                        updated.enabled_tools = original.enabled_tools.clone();
-                        updated.disabled_tools = original.disabled_tools.clone();
-                        app.config.servers[app.selected_server] = updated;
-                    }
+                    app.config.servers[app.selected_server] = server;
 
                     // Update tool_cache server name if it changed
                     if let Some(orig_name) = original_name {
