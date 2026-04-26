@@ -5,3 +5,6 @@
 
 # Macos
 .DS_Store
+
+# Docs
+/.docs
